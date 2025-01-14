@@ -123,4 +123,4 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 
 ## Credits
 
-This project uses models from the [yolo-doclaynet repository](https://github.com/ppaanngggg/yolo-doclaynet). We are grateful to the contributors of that project.
+- This project uses models from the [yolo-doclaynet repository](https://github.com/ppaanngggg/yolo-doclaynet). We are grateful to the contributors of that project.
