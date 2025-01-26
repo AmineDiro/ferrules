@@ -1,13 +1,15 @@
-use std::{fmt::Write, ops::Range, path::Path, time::Instant};
-
+use anyhow::Context;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::izip;
 use memmap2::Mmap;
 use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use rayon::prelude::*;
+use std::{fmt::Write, fs::File, ops::Range, path::Path, time::Instant};
 use uuid::Uuid;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
+    doc_chunks,
     entities::{
         BBox, CharSpan, Document, Element, ElementType, Line, Page, PageID, StructuredPage,
     },
@@ -225,24 +227,38 @@ pub fn parse_pages(
     Ok(structured_pages)
 }
 
-fn doc_chunks(
-    n_pages: usize,
-    n_workers: usize,
-    page_range: Option<Range<usize>>,
-) -> Vec<Range<usize>> {
-    let page_range: Vec<usize> = match page_range {
-        Some(range) => range.collect(),
-        None => (0..n_pages).collect(),
-    };
+#[allow(clippy::too_many_arguments)]
+fn parse_document_range(
+    doc_bytes: &[u8],
+    page_range: Range<usize>,
+    layout_model: &ORTLayoutParser,
+    password: Option<&str>,
+    flatten_pdf: bool,
+    tmp_dir: &Path,
+    debug: bool,
+    // TODO: This should be a callback function
+    pb: ProgressBar,
+) -> anyhow::Result<Vec<StructuredPage>> {
+    dbg!(&page_range);
+    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
+    let mut document = pdfium.load_pdf_from_byte_slice(doc_bytes, password)?;
+    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
+    let mut pages = pages.drain(page_range).collect::<Vec<_>>();
+    parse_pages(&mut pages, layout_model, tmp_dir, flatten_pdf, debug, &pb)
+}
 
-    if page_range.len() > n_workers {
-        page_range
-            .chunks(n_pages / n_workers)
-            .map(|c| (*c.first().unwrap()..*c.last().unwrap()))
-            .collect()
-    } else {
-        vec![(0..n_pages)]
-    }
+fn get_doc_bytes<P: AsRef<Path>>(path: P) -> anyhow::Result<Mmap> {
+    let file = File::open(path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
+    Ok(mmap)
+}
+
+fn get_page_len(doc_bytes: &[u8], password: Option<&str>) -> usize {
+    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library().unwrap());
+    let document = pdfium
+        .load_pdf_from_byte_slice(doc_bytes, password)
+        .expect("can't open doc with pdfium");
+    document.pages().len() as usize
 }
 
 pub fn parse_document<P: AsRef<Path>>(
@@ -266,30 +282,17 @@ pub fn parse_document<P: AsRef<Path>>(
         std::fs::create_dir_all(&tmp_dir)?;
     }
 
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
-
-    let mut document = pdfium.load_pdf_from_file(&path, password)?;
-
-    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-
-    let mut pages = if let Some(range) = page_range {
-        if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            );
-        }
-        pages.drain(range).collect()
-    } else {
-        pages
-    };
-
-    let chunk_size = std::thread::available_parallelism()
+    let n_workers = std::thread::available_parallelism()
         .map(|c| c.get())
         .unwrap_or(4usize);
 
-    let pb = ProgressBar::new(pages.len() as u64);
+    let doc_bytes = get_doc_bytes(&path)?;
+
+    // Divide doc into chunks
+    let n_pages = get_page_len(&doc_bytes, password);
+    let chunks = doc_chunks(n_pages, n_workers, page_range);
+
+    let pb = ProgressBar::new(chunks.iter().map(|c| c.len()).sum::<usize>() as u64);
     pb.set_style(
         ProgressStyle::with_template(
             "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
@@ -301,11 +304,27 @@ pub fn parse_document<P: AsRef<Path>>(
         .progress_chars("#>-"),
     );
 
-    let parsed_pages = pages
-        .chunks_mut(chunk_size)
-        .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug, &pb))
+    //  Process doc chunks in threadpool
+    let parsed_pages: anyhow::Result<Vec<_>> = chunks
+        .into_par_iter()
+        .map(|page_range| {
+            parse_document_range(
+                &doc_bytes,
+                page_range,
+                layout_model,
+                password,
+                flatten_pdf,
+                &tmp_dir,
+                debug,
+                pb.clone(),
+            )
+        })
+        .collect();
+    let parsed_pages: Vec<_> = parsed_pages
+        .context("Error parsing pages")?
+        .into_iter()
         .flatten()
-        .collect::<Vec<_>>();
+        .collect();
 
     // TODO: clone might be huge here
     let all_elements = parsed_pages

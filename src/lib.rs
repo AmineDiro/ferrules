@@ -3,6 +3,7 @@ use colored::*;
 use std::{
     fs::File,
     io::{BufWriter, Write},
+    ops::Range,
     path::Path,
 };
 
@@ -114,4 +115,65 @@ pub fn save_parsed_document<P: AsRef<Path> + Serialize>(
     );
 
     Ok(())
+}
+
+pub(crate) fn doc_chunks(
+    n_pages: usize,
+    n_workers: usize,
+    page_range: Option<Range<usize>>,
+) -> Vec<Range<usize>> {
+    let page_range: Vec<usize> = match page_range {
+        Some(range) => range.collect(),
+        None => (0..n_pages).collect(),
+    };
+
+    if page_range.len() > n_workers {
+        page_range
+            .chunks(n_pages / n_workers)
+            .map(|c| (*c.first().unwrap()..*c.last().unwrap()))
+            .collect()
+    } else {
+        vec![(0..n_pages)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_doc_chunks_with_more_pages_than_workers() {
+        let chunks = doc_chunks(10, 2, None);
+        assert_eq!(chunks, vec![0..4, 5..9]); // Should split into roughly equal chunks
+    }
+
+    #[test]
+    fn test_doc_chunks_with_fewer_pages_than_workers() {
+        let chunks = doc_chunks(3, 4, None);
+        assert_eq!(chunks, vec![0..3]); // Should return single chunk
+    }
+
+    #[test]
+    fn test_doc_chunks_with_custom_page_range() {
+        let chunks = doc_chunks(10, 2, Some(2..8));
+        assert_eq!(chunks, vec![2..4, 5..7]); // Should respect custom range
+    }
+
+    #[test]
+    fn test_doc_chunks_with_single_worker() {
+        let chunks = doc_chunks(5, 1, None);
+        assert_eq!(chunks, vec![0..5]); // Should return single chunk
+    }
+
+    #[test]
+    fn test_doc_chunks_with_empty_range() {
+        let chunks = doc_chunks(0, 2, None);
+        assert_eq!(chunks, vec![0..0]); // Should handle empty range
+    }
+
+    #[test]
+    fn test_doc_chunks_equal_pages_and_workers() {
+        let chunks = doc_chunks(4, 4, None);
+        assert_eq!(chunks, vec![0..4]); // Should return single chunk when pages equals workers
+    }
 }
