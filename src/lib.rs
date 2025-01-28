@@ -117,7 +117,7 @@ pub fn save_parsed_document<P: AsRef<Path> + Serialize>(
     Ok(())
 }
 
-pub(crate) fn doc_chunks(
+pub(crate) fn chunk_docs_range(
     n_pages: usize,
     n_workers: usize,
     page_range: Option<Range<usize>>,
@@ -129,7 +129,7 @@ pub(crate) fn doc_chunks(
 
     if page_range.len() > n_workers {
         page_range
-            .chunks(n_pages / n_workers)
+            .chunks(page_range.len() / n_workers)
             .map(|c| (*c.first().unwrap()..*c.last().unwrap()))
             .collect()
     } else {
@@ -140,40 +140,67 @@ pub(crate) fn doc_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_doc_chunks_with_more_pages_than_workers() {
-        let chunks = doc_chunks(10, 2, None);
-        assert_eq!(chunks, vec![0..4, 5..9]); // Should split into roughly equal chunks
+    fn test_chunk_docs_range_with_more_pages_than_workers() {
+        let n_pages = 10;
+        let n_workers = 3;
+        let result = chunk_docs_range(n_pages, n_workers, None);
+
+        assert_eq!(result.len(), 3); // Should split into 3 chunks
+        assert_eq!(result[0], 0..3);
+        assert_eq!(result[1], 3..6);
+        assert_eq!(result[2], 6..9);
     }
 
     #[test]
-    fn test_doc_chunks_with_fewer_pages_than_workers() {
-        let chunks = doc_chunks(3, 4, None);
-        assert_eq!(chunks, vec![0..3]); // Should return single chunk
+    fn test_chunk_docs_range_with_fewer_pages_than_workers() {
+        let n_pages = 3;
+        let n_workers = 5;
+        let result = chunk_docs_range(n_pages, n_workers, None);
+
+        assert_eq!(result.len(), 1); // Should return single range
+        assert_eq!(result[0], 0..3);
     }
 
     #[test]
-    fn test_doc_chunks_with_custom_page_range() {
-        let chunks = doc_chunks(10, 2, Some(2..8));
-        assert_eq!(chunks, vec![2..4, 5..7]); // Should respect custom range
+    fn test_chunk_docs_range_with_custom_range() {
+        let n_pages = 10;
+        let n_workers = 2;
+        let page_range = Some(2..8); // Pages 2 to 7
+        let result = chunk_docs_range(n_pages, n_workers, page_range);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], 2..4);
+        assert_eq!(result[1], 4..7);
     }
 
     #[test]
-    fn test_doc_chunks_with_single_worker() {
-        let chunks = doc_chunks(5, 1, None);
-        assert_eq!(chunks, vec![0..5]); // Should return single chunk
+    fn test_chunk_docs_range_with_single_page() {
+        let n_pages = 1;
+        let n_workers = 1;
+        let result = chunk_docs_range(n_pages, n_workers, None);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 0..1);
     }
 
     #[test]
-    fn test_doc_chunks_with_empty_range() {
-        let chunks = doc_chunks(0, 2, None);
-        assert_eq!(chunks, vec![0..0]); // Should handle empty range
+    fn test_chunk_docs_range_with_zero_pages() {
+        let n_pages = 0;
+        let n_workers = 1;
+        let result = chunk_docs_range(n_pages, n_workers, None);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 0..0);
     }
 
     #[test]
-    fn test_doc_chunks_equal_pages_and_workers() {
-        let chunks = doc_chunks(4, 4, None);
-        assert_eq!(chunks, vec![0..4]); // Should return single chunk when pages equals workers
+    fn test_chunk_docs_range_with_equal_pages_and_workers() {
+        let n_pages = 4;
+        let n_workers = 4;
+        let result = chunk_docs_range(n_pages, n_workers, None);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 0..4);
     }
 }

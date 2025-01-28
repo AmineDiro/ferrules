@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
-    doc_chunks,
+    chunk_docs_range,
     entities::{
         BBox, CharSpan, Document, Element, ElementType, Line, Page, PageID, StructuredPage,
     },
@@ -227,26 +227,6 @@ pub fn parse_pages(
     Ok(structured_pages)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn parse_document_range(
-    doc_bytes: &[u8],
-    page_range: Range<usize>,
-    layout_model: &ORTLayoutParser,
-    password: Option<&str>,
-    flatten_pdf: bool,
-    tmp_dir: &Path,
-    debug: bool,
-    // TODO: This should be a callback function
-    pb: ProgressBar,
-) -> anyhow::Result<Vec<StructuredPage>> {
-    dbg!(&page_range);
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
-    let mut document = pdfium.load_pdf_from_byte_slice(doc_bytes, password)?;
-    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-    let mut pages = pages.drain(page_range).collect::<Vec<_>>();
-    parse_pages(&mut pages, layout_model, tmp_dir, flatten_pdf, debug, &pb)
-}
-
 fn get_doc_bytes<P: AsRef<Path>>(path: P) -> anyhow::Result<Mmap> {
     let file = File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -259,6 +239,25 @@ fn get_page_len(doc_bytes: &[u8], password: Option<&str>) -> usize {
         .load_pdf_from_byte_slice(doc_bytes, password)
         .expect("can't open doc with pdfium");
     document.pages().len() as usize
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_document_range(
+    doc_bytes: &[u8],
+    page_range: Range<usize>,
+    layout_model: &ORTLayoutParser,
+    password: Option<&str>,
+    flatten_pdf: bool,
+    tmp_dir: &Path,
+    debug: bool,
+    // TODO: This should be a callback function
+    pb: ProgressBar,
+) -> anyhow::Result<Vec<StructuredPage>> {
+    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
+    let mut document = pdfium.load_pdf_from_byte_slice(doc_bytes, password)?;
+    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
+    let mut pages = pages.drain(page_range).collect::<Vec<_>>();
+    parse_pages(&mut pages, layout_model, tmp_dir, flatten_pdf, debug, &pb)
 }
 
 pub fn parse_document<P: AsRef<Path>>(
@@ -290,7 +289,7 @@ pub fn parse_document<P: AsRef<Path>>(
 
     // Divide doc into chunks
     let n_pages = get_page_len(&doc_bytes, password);
-    let chunks = doc_chunks(n_pages, n_workers, page_range);
+    let chunks = chunk_docs_range(n_pages, n_workers, page_range);
 
     let pb = ProgressBar::new(chunks.iter().map(|c| c.len()).sum::<usize>() as u64);
     pb.set_style(
