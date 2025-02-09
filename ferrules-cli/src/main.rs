@@ -111,8 +111,9 @@ struct Args {
     /// Number of threads to use within individual operations
     #[arg(
         long,
+        short = 'j',
         help = "Number of threads to use for parallel processing within operations",
-        default_value = "16"
+        default_value = "2"
     )]
     intra_threads: usize,
 
@@ -120,7 +121,7 @@ struct Args {
     #[arg(
         long,
         help = "Number of threads to use for executing operations in parallel",
-        default_value = "4"
+        default_value = "1"
     )]
     inter_threads: usize,
 

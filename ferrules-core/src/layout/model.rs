@@ -1,3 +1,5 @@
+use std::sync::{Arc, Condvar, Mutex};
+
 use anyhow::{bail, Context};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
@@ -7,7 +9,10 @@ use ort::{
         CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
         TensorRTExecutionProvider,
     },
-    session::{builder::GraphOptimizationLevel, Session},
+    memory::{AllocationDevice, Allocator, AllocatorType, MemoryType},
+    session::{builder::GraphOptimizationLevel, Session, SessionInputValue, SessionInputs},
+    value::Tensor,
+    AsPointer,
 };
 
 use crate::entities::BBox;
@@ -103,47 +108,43 @@ impl LayoutBBox {
     }
 }
 
+#[derive(Debug, Default)]
+struct BufferPool {
+    store: std::sync::Mutex<Vec<Tensor<f32>>>,
+    cvar: std::sync::Condvar,
+}
+impl BufferPool {
+    fn new(seed: Vec<Tensor<f32>>) -> Self {
+        Self {
+            store: Mutex::new(seed),
+            cvar: Condvar::new(),
+        }
+    }
+    fn put(&self, buffer: Tensor<f32>) -> anyhow::Result<()> {
+        let mut store = self.store.lock().expect("poison lock");
+        store.push(buffer);
+        self.cvar.notify_one();
+        Ok(())
+    }
+    fn get(&self) -> Tensor<f32> {
+        let mut store = self.store.lock().unwrap();
+        loop {
+            let result = store.pop();
+            match result {
+                Some(t) => return t,
+                None => {
+                    store = self.cvar.wait(store).unwrap();
+                }
+            }
+        }
+    }
+}
 #[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
     output_name: String,
     pub config: ORTConfig,
-}
-
-impl ORTLayoutParser {
-    #[tracing::instrument(skip_all)]
-    pub async fn parse_layout_async(
-        &self,
-        page_img: &DynamicImage,
-        bbox_rescale_factor: f32,
-    ) -> anyhow::Result<Vec<LayoutBBox>> {
-        let (img_width, img_height) = (page_img.width(), page_img.height());
-        let input = self.preprocess(page_img);
-        let output_tensor = self.run_async(input).await?;
-        let mut bboxes =
-            self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
-        nms(&mut bboxes, Self::IOU_THRESHOLD);
-        Ok(bboxes)
-    }
-
-    async fn run_async(
-        &self,
-        input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
-    ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run_async(ort::inputs![input]?)?.await?;
-
-        let output_tensor = outputs
-            .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
-
-        let output_tensor = output_tensor
-            .to_shape(Self::OUTPUT_SIZE)
-            .unwrap()
-            .to_owned();
-
-        Ok(output_tensor)
-    }
+    buffer_pool: Arc<BufferPool>,
 }
 
 impl ORTLayoutParser {
@@ -164,8 +165,8 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.8;
 
-    pub const ORT_INTRATHREAD: usize = 16;
-    pub const ORT_INTERTHREAD: usize = 4;
+    pub const ORT_INTRATHREAD: usize = 2;
+    pub const ORT_INTERTHREAD: usize = 1;
 
     pub fn new(mut config: ORTConfig) -> anyhow::Result<Self> {
         let mut execution_providers = Vec::new();
@@ -175,7 +176,7 @@ impl ORTLayoutParser {
         providers.sort();
 
         // Providers
-        for provider in providers {
+        for provider in providers.iter() {
             match provider {
                 OrtExecutionProvider::Trt(device_id) => {
                     execution_providers.push(
@@ -220,6 +221,40 @@ impl ORTLayoutParser {
             .with_inter_threads(config.inter_threads)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
+        let (alloc_device, device_id) = match providers
+            .iter()
+            .find(|p| matches!(p, OrtExecutionProvider::CUDA(_)))
+        {
+            Some(OrtExecutionProvider::CUDA(id)) => (AllocationDevice::CUDA_PINNED, *id),
+            _ => (AllocationDevice::CPU, 0),
+        };
+        let allocator = Allocator::new(
+            &session,
+            ort::memory::MemoryInfo::new(
+                alloc_device,
+                device_id,
+                AllocatorType::Device,
+                MemoryType::CPUInput,
+            )?,
+        )?;
+
+        let seed_vectors = (0..config.intra_threads)
+            .map(|_| {
+                ort::value::Tensor::<f32>::new(
+                    &allocator,
+                    [
+                        1,
+                        3,
+                        Self::REQUIRED_HEIGHT as usize,
+                        Self::REQUIRED_WIDTH as usize,
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let buffer_pool = Arc::new(BufferPool::new(seed_vectors));
+
         let output_name = session
             .outputs
             .first()
@@ -231,14 +266,41 @@ impl ORTLayoutParser {
             session,
             output_name,
             config,
+            buffer_pool,
         })
     }
-
-    pub fn run(
+    #[tracing::instrument(skip_all)]
+    pub async fn parse_layout_async(
         &self,
-        input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
+        page_img: &DynamicImage,
+        bbox_rescale_factor: f32,
+    ) -> anyhow::Result<Vec<LayoutBBox>> {
+        let (img_width, img_height) = (page_img.width(), page_img.height());
+        let mut input_tensor = self.buffer_pool.get();
+        self.preprocess(&mut input_tensor, page_img)?;
+        let input_tensor_ptr = &input_tensor as *const Tensor<f32>;
+        // SAFERTY : ???
+        let input_tensor_ref = unsafe { &*input_tensor_ptr };
+        let output_tensor = self.run_async(input_tensor_ref).await?;
+        self.buffer_pool.put(input_tensor)?;
+
+        let mut bboxes =
+            self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
+        nms(&mut bboxes, Self::IOU_THRESHOLD);
+        Ok(bboxes)
+    }
+
+    async fn run_async(
+        &self,
+        input_tensor: &'static Tensor<f32>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run(ort::inputs![input]?)?;
+        let val = vec![(
+            "images",
+            SessionInputValue::View(input_tensor.view().into_dyn()),
+        )];
+        let session_input: SessionInputs = SessionInputs::from(val);
+
+        let outputs = &self.session.run_async(session_input)?.await?;
 
         let output_tensor = outputs
             .get(&self.output_name)
@@ -251,21 +313,6 @@ impl ORTLayoutParser {
             .to_owned();
 
         Ok(output_tensor)
-    }
-
-    pub fn parse_layout(
-        &self,
-        page_img: &DynamicImage,
-        bbox_rescale_factor: f32,
-    ) -> anyhow::Result<Vec<LayoutBBox>> {
-        let (img_width, img_height) = (page_img.width(), page_img.height());
-        let input = self.preprocess(page_img);
-        let output_tensor = self.run(input)?;
-        let mut bboxes =
-            self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
-        nms(&mut bboxes, Self::IOU_THRESHOLD);
-
-        Ok(bboxes)
     }
 
     #[tracing::instrument(skip_all)]
@@ -369,7 +416,7 @@ impl ORTLayoutParser {
         input_tensor
     }
 
-    fn preprocess(&self, img: &DynamicImage) -> Array4<f32> {
+    fn preprocess(&self, input_tensor: &mut Tensor<f32>, img: &DynamicImage) -> anyhow::Result<()> {
         let (w0, h0) = img.dimensions();
         let (_, w_new, h_new) = self.scale_wh(
             w0 as f32,
@@ -378,23 +425,20 @@ impl ORTLayoutParser {
             Self::REQUIRED_HEIGHT as f32,
         ); // f32 round
         let resized_img = img.resize_exact(w_new as u32, h_new as u32, FilterType::Triangle);
+
+        let mut extracted = input_tensor.extract_tensor_mut();
+        extracted.fill(144.0 / 255.0);
+
         // TODO: reuse this buffer between batches
-        let mut input_tensor = Array4::ones([
-            1,
-            3,
-            Self::REQUIRED_HEIGHT as usize,
-            Self::REQUIRED_WIDTH as usize,
-        ]);
-        input_tensor.fill(144.0 / 255.0);
         for (x, y, pixel) in resized_img.pixels() {
             let x = x as usize;
             let y = y as _;
             let [r, g, b, _] = pixel.0;
-            input_tensor[[0, 0, y, x]] = r as f32 / 255.0;
-            input_tensor[[0, 1, y, x]] = g as f32 / 255.0;
-            input_tensor[[0, 2, y, x]] = b as f32 / 255.0;
+            extracted[[0, 0, y, x]] = r as f32 / 255.0;
+            extracted[[0, 1, y, x]] = g as f32 / 255.0;
+            extracted[[0, 2, y, x]] = b as f32 / 255.0;
         }
-        input_tensor
+        Ok(())
     }
 }
 

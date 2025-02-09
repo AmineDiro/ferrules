@@ -31,8 +31,8 @@ fn get_fake_images(count: usize, width: u32, height: u32) -> Vec<DynamicImage> {
 
 fn parse_loop(model: &ORTLayoutParser, images: &[DynamicImage], factors: &[f32]) {
     for (image, factor) in images.iter().zip(factors.iter()) {
-        let input = model.parse_layout(image, *factor);
-        let _bbox = input.unwrap();
+        let input = model.parse_layout_async(image, *factor);
+        let _bbox = input;
     }
 }
 

@@ -10,6 +10,7 @@ use tracing::{Instrument, Span};
 use crate::entities::PageID;
 
 pub mod model;
+// mod infer;
 
 #[derive(Debug)]
 pub struct Metadata {
