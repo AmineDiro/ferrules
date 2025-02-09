@@ -12,7 +12,6 @@ use ort::{
     memory::{AllocationDevice, Allocator, AllocatorType, MemoryType},
     session::{builder::GraphOptimizationLevel, Session, SessionInputValue, SessionInputs},
     value::Tensor,
-    AsPointer,
 };
 
 use crate::entities::BBox;

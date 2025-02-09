@@ -4,7 +4,7 @@ use anyhow::Context;
 use image::DynamicImage;
 use model::{LayoutBBox, ORTLayoutParser};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{oneshot, Mutex, Notify, Semaphore};
 use tracing::{Instrument, Span};
 
 use crate::entities::PageID;
@@ -19,11 +19,11 @@ pub struct Metadata {
 }
 
 #[derive(Debug)]
-pub(crate) struct ParseLayoutRequest {
-    pub(crate) page_id: PageID,
-    pub(crate) page_image: Arc<DynamicImage>,
-    pub(crate) downscale_factor: f32,
-    pub(crate) metadata: Metadata,
+pub struct ParseLayoutRequest {
+    pub page_id: PageID,
+    pub page_image: Arc<DynamicImage>,
+    pub downscale_factor: f32,
+    pub metadata: Metadata,
 }
 
 #[derive(Debug)]
@@ -37,15 +37,28 @@ pub(crate) struct ParseLayoutResponse {
 #[derive(Debug, Clone)]
 pub struct ParseLayoutQueue {
     queue: Sender<(ParseLayoutRequest, Span)>,
+    notifier: Arc<Notify>,
 }
 
 impl ParseLayoutQueue {
-    pub fn new(layout_parser: Arc<ORTLayoutParser>) -> Self {
-        let (queue_sender, queue_receiver) = mpsc::channel(layout_parser.config.intra_threads);
+    pub fn new(ort_config: model::ORTConfig, n_parser: usize) -> Self {
+        let (queue_sender, queue_receiver) = mpsc::channel(ort_config.intra_threads);
 
-        tokio::task::spawn(start_layout_parser(layout_parser, queue_receiver));
+        let queue_receiver = Arc::new(Mutex::new(queue_receiver));
+        let notifier = Arc::new(Notify::new());
+        for _ in 0..n_parser {
+            let layout_model = Arc::new(
+                ORTLayoutParser::new(ort_config.clone()).expect("Failed to load layout model"),
+            );
+            tokio::task::spawn(start_layout_parser(
+                layout_model.clone(),
+                queue_receiver.clone(),
+                notifier.clone(),
+            ));
+        }
         Self {
             queue: queue_sender,
+            notifier,
         }
     }
 
@@ -54,23 +67,35 @@ impl ParseLayoutQueue {
         self.queue
             .send((req, span))
             .await
-            .context("error sending  parse req")
+            .context("error sending  parse req")?;
+        self.notifier.notify_one();
+        Ok(())
     }
 }
 
 async fn start_layout_parser(
     layout_parser: Arc<ORTLayoutParser>,
-    mut input_rx: Receiver<(ParseLayoutRequest, Span)>,
+    input_rx: Arc<Mutex<Receiver<(ParseLayoutRequest, Span)>>>,
+    notify: Arc<Notify>,
 ) {
     let s = Arc::new(Semaphore::new(layout_parser.config.intra_threads));
-    while let Some((req, span)) = input_rx.recv().await {
-        let queue_time = req.metadata.queue_time.elapsed().as_millis();
-        let page_id = req.page_id;
-        tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
-        let _guard = span.enter();
-        tokio::spawn(
-            handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
-        );
+
+    loop {
+        let next_message = {
+            let mut lock = input_rx.lock().await;
+            lock.recv().await
+        };
+
+        if let Some((req, span)) = next_message {
+            let queue_time = req.metadata.queue_time.elapsed().as_millis();
+            let page_id = req.page_id;
+            tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
+            let _guard = span.enter();
+            tokio::spawn(
+                handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
+            );
+        }
+        notify.notified().await;
     }
 }
 

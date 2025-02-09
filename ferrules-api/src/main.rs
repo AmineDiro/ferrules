@@ -10,15 +10,12 @@ use clap::Parser;
 use ferrules_api::init_tracing;
 use ferrules_core::layout::model::{ORTConfig, OrtExecutionProvider};
 use ferrules_core::{
-    layout::{model::ORTLayoutParser, ParseLayoutQueue},
+    layout::ParseLayoutQueue,
     parse::{document::parse_document, native::ParseNativeQueue},
 };
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{Seek, Write},
-    sync::Arc,
-};
+use std::io::{Seek, Write};
 use tempfile::NamedTempFile;
 use tokio::{fs::File, net::TcpListener};
 use uuid::Uuid;
@@ -98,9 +95,17 @@ struct Args {
     #[arg(
         long,
         help = "Number of threads to use for executing operations in parallel",
-        default_value = "4"
+        default_value = "1"
     )]
     inter_threads: usize,
+
+    #[arg(
+        long,
+        short = 'L',
+        help = "Number of parallel layout models",
+        default_value = "4"
+    )]
+    layout_parallel: usize,
 
     #[arg(long, short = 'O', help = "Ort graph optimization level")]
     graph_opt_level: Option<usize>,
@@ -179,10 +184,11 @@ async fn main() {
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
+
     // Initialize the layout model and queues
-    let layout_model =
-        Arc::new(ORTLayoutParser::new(ort_config).expect("Failed to load layout model"));
-    let layout_queue = ParseLayoutQueue::new(layout_model);
+    let layout_queue = ParseLayoutQueue::new(ort_config, args.layout_parallel);
+
+    // BG Native worker
     let native_queue = ParseNativeQueue::new();
 
     let app_state = AppState {

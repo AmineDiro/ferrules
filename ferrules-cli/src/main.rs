@@ -225,7 +225,7 @@ async fn main() {
     };
     // Global tasks
     let layout_model = Arc::new(ORTLayoutParser::new(ort_config).expect("can't load layout model"));
-    let layout_queue = ParseLayoutQueue::new(layout_model);
+    let layout_queue = ParseLayoutQueue::new(layout_model, 1);
     let native_queue = ParseNativeQueue::new();
 
     let page_range = args
