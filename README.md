@@ -1,5 +1,3 @@
-
-
 <div align="center">
 <h1> Ferrules:  Modern, fast, document parser written in 🦀 </h1>
 </div>
@@ -81,7 +79,9 @@ Visit the [GitHub Releases](https://github.com/aminediro/ferrules/releases) page
 
 ## Usage
 
-Ferrules can be used via command line with various options to control the parsing process.
+Ferrules provides two ways to use the library:
+
+### 1. Command Line Interface (CLI)
 
 ### Basic Usage
 
@@ -125,22 +125,36 @@ Each color represents different elements detected in the document:
 
 ```
 Options:
-      --page-range <PAGE_RANGE>
+  -r, --page-range <PAGE_RANGE>
           Specify pages to parse (e.g., '1-5' or '1' for single page)
       --output-dir <OUTPUT_DIR>
           Specify the directory to store parsing result [env: FERRULES_OUTPUT_DIR=]
+      --save-images
+          Specify the directory to store parsing result
       --layout-model-path <LAYOUT_MODEL_PATH>
           Specify the path to the layout model for document parsing [env: FERRULES_LAYOUT_MODEL_PATH=]
       --coreml
           Enable or disable the use of CoreML for layout inference
+      --use-ane
+          Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)
+      --trt
+          Enable or disable the use of TensorRT for layout inference
       --cuda
           Enable or disable the use of CUDA for layout inference
+      --device-id <DEVICE_ID>
+          CUDA device ID to use (0 for first GPU) [default: 0]
+  -j, --intra-threads <INTRA_THREADS>
+          Number of threads to use for parallel processing within operations [default: 2]
+      --inter-threads <INTER_THREADS>
+          Number of threads to use for executing operations in parallel [default: 1]
+  -O, --graph-opt-level <GRAPH_OPT_LEVEL>
+          Ort graph optimization level
       --debug
           Activate debug mode for detailed processing information [env: FERRULES_DEBUG=]
       --debug-dir <DEBUG_DIR>
           Specify the directory to store debug output files [env: FERRULES_DEBUG_PATH=]
   -h, --help
-          Print help (see more with '--help')
+          Print help
   -V, --version
           Print version
 ```
@@ -151,6 +165,16 @@ You can also configure some options through environment variables:
 - `FERRULES_LAYOUT_MODEL_PATH`: Set the layout model path
 - `FERRULES_DEBUG`: Enable debug mode
 - `FERRULES_DEBUG_PATH`: Set the debug output directory
+
+### 2. HTTP API Server
+
+Ferrules also provides an HTTP API server for integration into existing systems. To start the API server:
+
+```sh
+ferrules-api
+```
+
+By default, the server listens on `0.0.0.0:3002`. For detailed API documentation, see [API.md](./API.md).
 
 ## Resources:
 
