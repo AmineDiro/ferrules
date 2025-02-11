@@ -2,7 +2,7 @@ use clap::Parser;
 
 use ferrules_core::{
     layout::{
-        model::{ORTConfig, ORTLayoutParser, OrtExecutionProvider},
+        model::{ORTConfig, OrtExecutionProvider},
         ParseLayoutQueue,
     },
     parse::{
@@ -17,7 +17,6 @@ use std::{
     fmt::Write,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 use tokio::fs::File;
 use uuid::Uuid;
@@ -224,8 +223,7 @@ async fn main() {
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
     // Global tasks
-    let layout_model = Arc::new(ORTLayoutParser::new(ort_config).expect("can't load layout model"));
-    let layout_queue = ParseLayoutQueue::new(layout_model, 1);
+    let layout_queue = ParseLayoutQueue::new(ort_config, 1);
     let native_queue = ParseNativeQueue::new();
 
     let page_range = args
