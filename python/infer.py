@@ -26,7 +26,6 @@ onnx_model = YOLO("yolov8s-doclaynet.onnx")
 onnx_model.overrides["imgsz"] = 1024
 
 result = onnx_model(pil_image)[0]
-breakpoint()
 
 # 7) Retrieve the original height/width that YOLO sees
 height = result.orig_shape[0]

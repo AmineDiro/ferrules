@@ -28,42 +28,53 @@ def create_session(model_path):
 
 
 def run_inference(session, input_tensor):
-    # Get model input name
     input_name = session.get_inputs()[0].name
-    # Run inference
-    output = session.run(None, {input_name: input_tensor})
-    return output
+    return  session.run(None, {input_name: input_tensor})
 
 
 if __name__ == "__main__":
+
     ##### BATCH
     onnx_model_path = "../models/yolov8s-doclaynet-batch-16.onnx"
     batch_session = create_session(onnx_model_path)
 
-    input_tensor = np.random.rand(16, 3, 1024, 1024).astype(np.float32)
+    N_BATCH=16
+    N=10
+    input_tensor = np.random.rand(N_BATCH, 3, 1024, 1024).astype(np.float32)
 
-    # _ = run_inference(batch_session, input_tensor)
+    _ = run_inference(batch_session, input_tensor)
     s = perf_counter()
-    for i in range(1):
+    for i in range(N):
         outputs = run_inference(batch_session, input_tensor)
     e = perf_counter()
-    print(f"Model {onnx_model_path} took: {e-s:.2f}s")
+    duration = e-s
+    print(f"Model {onnx_model_path} took: {duration:.2f}s. {N*N_BATCH/duration:.2f} page/s")
+    del batch_session
 
     ##### SINGLE
-    # onnx_model_path = "../models/yolov8s-doclaynet.onnx"
-    # single_batch_session = create_session(onnx_model_path)
-    # input_tensor = np.random.rand(1, 3, 1024, 1024).astype(np.float32)
-    # # _ = run_inference(single_batch_session, input_tensor)
-    # batch_size = 16  # Total number of inferences to run
-    # s = perf_counter()
-    # with concurrent.futures.ThreadPoolExecutor() as executor:
+    onnx_model_path = "../models/yolov8s-doclaynet.onnx"
+    single_batch_session = create_session(onnx_model_path)
+    input_tensor = np.random.rand(1, 3, 1024, 1024).astype(np.float32)
+    _ = run_inference(single_batch_session, input_tensor)
+
+    s = perf_counter()
+    for _ in range(N_BATCH*N):
+        _ = run_inference(single_batch_session, input_tensor)
+    e = perf_counter()
+    duration = e-s
+
+    print(f"Single threaded model {onnx_model_path} took: {duration:.2f}s. {N*N_BATCH/duration:.2f} page/s")
+
+    ## MULTITHREADED
+    # with concurrent.futures.ThreadPoolExecutor(10) as executor:
     #     futures = [
     #         executor.submit(run_inference, single_batch_session, input_tensor)
-    #         for _ in range(batch_size)
+    #         for _ in range(N_BATCH*N)
     #     ]
     #     results = [
     #         future.result() for future in concurrent.futures.as_completed(futures)
     #     ]
-
+    #
     # e = perf_counter()
-    # print(f"Model {onnx_model_path} took: {e-s:.2f}s")
+    # duration = e-s
+    # print(f"Multithreaded single_batch model {onnx_model_path} took: {duration:.2f}s. {N*N_BATCH/duration:.2f} page/s")
