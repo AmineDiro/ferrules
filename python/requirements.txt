@@ -7,8 +7,11 @@ onnx
 onnxruntime-gpu
 onnxconverter-common
 
+# scripts
+aiohttp
+
+
+# parsing
 ocrmac ; sys_platform == "darwin"
 unstructured[all]
-
-# tests
-aiohttp
+docling

@@ -1,18 +1,45 @@
 #!/usr/bin/env python3
+"""
+UNSTRUCTURED:
+    Parsing Statistics:
+    ==================
+    Total Documents Processed: 20
+    Total Elements Extracted: 38303
+    Average Elements per Document: 1915.15
+    Average Processing Time: 65124.20ms
+    Median Processing Time: 25282.43ms
+    Documents per Second: 0.03701149072375816
+    Min Processing Time: 2331.92ms
+    Max Processing Time: 512820.16ms
 
-import asyncio
+FERRULES: (94x parsing )
+    Parsing Statistics:
+    ==================
+    Total Documents Processed: 20
+    Total Pages Processed: 525
+    Total Blocks Extracted: 4991
+    Average Pages per Document: 26.25
+    Average Blocks per Document: 249.55
+    Average Blocks per Page: 11.515839964904599
+    Average Processing Time: 1920.50ms
+    Median Processing Time: 1107.50ms
+    Pages per Second: 74.31
+    Documents per Second: 2.83
+    Min Processing Time: 194.00ms
+    Max Processing Time: 6949.00ms
+"""
+
 from time import perf_counter
-import aiohttp
 import os
 from pathlib import Path
 import logging
 import json
 import glob
 import statistics
-
 import argparse
-from asyncio.locks import Semaphore
 import shutil
+from unstructured.partition.pdf import partition_pdf
+import concurrent.futures
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,16 +47,13 @@ logger = logging.getLogger(__name__)
 
 def analyze_parsing_results(
     processing_time_s: float,
-    results_dir="/tmp/pdf_responses",
+    results_dir="/tmp/unstructured_responses",
 ):
     stats = {
         "total_documents": 0,
-        "total_pages": 0,
-        "total_blocks": 0,
+        "total_elements": 0,
         "parsing_durations_ms": [],
-        "blocks_per_doc": [],
-        "pages_per_doc": [],
-        "blocks_per_page": [],
+        "elements_per_doc": [],
     }
 
     # Process all JSON files
@@ -40,23 +64,15 @@ def analyze_parsing_results(
                 if not response.get("success"):
                     continue
 
-                doc = response["data"]
-
                 # Get basic counts
-                n_pages = len(doc["pages"])
-                n_blocks = len(doc["blocks"])
-                parsing_duration_ms = doc["metadata"]["parsing_duration"]
+                n_elements = len(response["elements"])
+                parsing_duration_ms = response["metadata"]["parsing_duration"]
 
                 # Update statistics
                 stats["total_documents"] += 1
-                stats["total_pages"] += n_pages
-                stats["total_blocks"] += n_blocks
+                stats["total_elements"] += n_elements
                 stats["parsing_durations_ms"].append(parsing_duration_ms)
-                stats["blocks_per_doc"].append(n_blocks)
-                stats["pages_per_doc"].append(n_pages)
-                stats["blocks_per_page"].append(
-                    n_blocks / n_pages if n_pages > 0 else 0
-                )
+                stats["elements_per_doc"].append(n_elements)
 
             except Exception as e:
                 print(f"Error processing {json_file}: {e}")
@@ -64,18 +80,13 @@ def analyze_parsing_results(
 
     # Calculate aggregate statistics
     if stats["total_documents"] > 0:
-        docs_per_second = stats["total_documents"] / processing_time_s
         results = {
             "Total Documents Processed": stats["total_documents"],
-            "Total Pages Processed": stats["total_pages"],
-            "Total Blocks Extracted": stats["total_blocks"],
-            "Average Pages per Document": statistics.mean(stats["pages_per_doc"]),
-            "Average Blocks per Document": statistics.mean(stats["blocks_per_doc"]),
-            "Average Blocks per Page": statistics.mean(stats["blocks_per_page"]),
+            "Total Elements Extracted": stats["total_elements"],
+            "Average Elements per Document": statistics.mean(stats["elements_per_doc"]),
             "Average Processing Time": f"{statistics.mean(stats['parsing_durations_ms']):.2f}ms",
             "Median Processing Time": f"{statistics.median(stats['parsing_durations_ms']):.2f}ms",
-            "Pages per Second": f"{stats['total_pages'] / processing_time_s:.2f}",
-            "Documents per Second": f"{docs_per_second:.2f}",
+            "Documents per Second": stats["total_documents"] / processing_time_s,
             "Min Processing Time": f"{min(stats['parsing_durations_ms']):.2f}ms",
             "Max Processing Time": f"{max(stats['parsing_durations_ms']):.2f}ms",
         }
@@ -92,38 +103,44 @@ def analyze_parsing_results(
         return None
 
 
-async def process_file(session, file_path, sem):
-    """Process a single file using aiohttp with semaphore control."""
+def process_file(file_path):
+    """Process a single file using unstructured with highres strategy."""
     filename = os.path.basename(file_path)
 
-    async with sem:  # Use semaphore to limit concurrent requests
-        try:
-            # Prepare the file for upload
-            data = aiohttp.FormData()
-            data.add_field("file", open(file_path, "rb"), filename=filename)
+    try:
+        start_time = perf_counter()
+        elements = partition_pdf(file_path, strategy="hi_res", include_metadata=True)
+        end_time = perf_counter()
 
-            async with session.post(
-                "http://localhost:3002/parse", data=data
-            ) as response:
-                if response.status == 200:
-                    result = await response.text()
-                    logger.info(f"Successfully processed: {filename}")
-                    return filename, result
-                else:
-                    logger.error(
-                        f"Error processing {filename}: Status {response.status}"
-                    )
-                    return filename, None
-        except Exception as e:
-            logger.error(f"Exception processing {filename}: {str(e)}")
-            return filename, None
+        # Convert elements to serializable format
+        elements_data = [
+            {
+                "text": str(elem.text),
+                "type": type(elem).__name__,
+                "metadata": elem.to_dict(),
+            }
+            for elem in elements
+        ]
+
+        result = {
+            "success": True,
+            "elements": elements_data,
+            "metadata": {
+                "parsing_duration": (end_time - start_time) * 1000  # Convert to ms
+            },
+        }
+
+        logger.info(f"Successfully processed: {filename}")
+        return filename, json.dumps(result)
+    except Exception as e:
+        logger.error(f"Exception processing {filename}: {str(e)}")
+        return filename, json.dumps({"success": False, "error": str(e)})
 
 
-async def process_directory(
-    input_dir: str, max_concurrent: int = 4, output_dir="/tmp/pdf_responses", limit=None
+def process_directory(
+    input_dir, max_concurrent=4, output_dir="/tmp/unstructured_responses", limit=None
 ):
-    sem = Semaphore(max_concurrent)
-    """Process all PDF files in the directory with concurrency limit."""
+    """Process all PDF files in the directory with concurrent processing."""
     input_path = Path(input_dir)
     pdf_files = list(input_path.glob("*.pdf"))
     if limit is not None:
@@ -140,13 +157,9 @@ async def process_directory(
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Storing responses in: {output_dir}")
 
-    # Configure connection pooling
-    async with aiohttp.ClientSession() as session:
-        # Create tasks for all files, passing the semaphore
-        tasks = [process_file(session, str(pdf), sem) for pdf in pdf_files]
-
-        # Process files and gather results
-        results = await asyncio.gather(*tasks)
+    # Process files concurrently using ProcessPoolExecutor
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_concurrent) as executor:
+        results = list(executor.map(process_file, pdf_files))
 
         # Save results
         for filename, content in results:
@@ -157,19 +170,22 @@ async def process_directory(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Process PDF files for parsing.")
+    parser = argparse.ArgumentParser(
+        description="Process PDF files using unstructured."
+    )
     parser.add_argument("input_dir", help="Directory containing PDF files to process")
     parser.add_argument(
         "--max-concurrent",
         type=int,
-        default=10,
-        help="Maximum number of concurrent requests (default: 10)",
+        default=4,
+        help="Maximum number of concurrent processes (default: 4)",
     )
     parser.add_argument(
         "--limit",
         type=int,
         help="Limit the number of PDF files to process (default: process all files)",
     )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -178,11 +194,9 @@ def main():
         logger.error(f"Input directory '{args.input_dir}' does not exist")
         return
 
-    # Run the async process
+    # Run the process
     s = perf_counter()
-    asyncio.run(
-        process_directory(args.input_dir, args.max_concurrent, limit=args.limit)
-    )
+    process_directory(args.input_dir, args.max_concurrent, limit=args.limit)
     logger.info("All files processed.")
     e = perf_counter()
     analyze_parsing_results(e - s)
