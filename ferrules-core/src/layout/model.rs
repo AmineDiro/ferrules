@@ -311,7 +311,7 @@ impl ORTLayoutParser {
             debug_assert!(y0 <= y1 && y1 <= original_height as f32);
 
             if x0 > x1 || y0 > y1 {
-                eprintln!("bbox error: ({x0},{y1}), ({x1},{y1})");
+                dbg!("bbox error: ({x0},{y1}), ({x1},{y1})");
                 continue;
             }
 

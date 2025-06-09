@@ -1,12 +1,12 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
-use anyhow::Context;
 use image::DynamicImage;
 use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use tracing::{instrument, Span};
 
 use crate::{
     entities::{BBox, CharSpan, Line, PageID},
+    error::FerrulesError,
     layout::model::ORTLayoutParser,
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -124,12 +124,12 @@ impl ParseNativeQueue {
         }
     }
 
-    pub(crate) async fn push(&self, req: ParseNativeRequest) -> anyhow::Result<()> {
+    pub(crate) async fn push(&self, req: ParseNativeRequest) -> Result<(), FerrulesError> {
         let span = Span::current();
         self.queue
             .send((req, span))
             .await
-            .context("error sending parse native request")
+            .map_err(|_| FerrulesError::ParseNativeError)
     }
 }
 
@@ -193,7 +193,7 @@ fn handle_parse_native_req(
     pdfium: &Pdfium,
     req: ParseNativeRequest,
     parent_span: Span,
-) -> anyhow::Result<()> {
+) -> Result<(), FerrulesError> {
     // Reinter span
     let _guard = parent_span.enter();
     let ParseNativeRequest {
@@ -205,15 +205,13 @@ fn handle_parse_native_req(
         required_raster_height,
         sender_tx,
     } = req;
-    let mut document = pdfium.load_pdf_from_byte_slice(&doc_data, password.as_deref())?;
+    let mut document = pdfium
+        .load_pdf_from_byte_slice(&doc_data, password.as_deref())
+        .map_err(|_| FerrulesError::ParseNativeError)?;
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
     let pages = if let Some(range) = page_range {
         if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            )
+            return Err(FerrulesError::ParseNativeError);
         }
         pages.drain(range).collect()
     } else {
@@ -227,7 +225,9 @@ fn handle_parse_native_req(
             required_raster_width,
             required_raster_height,
         );
-        sender_tx.blocking_send(parsing_result)?
+        sender_tx
+            .blocking_send(parsing_result)
+            .map_err(|_| FerrulesError::ParseNativeError)?
     }
     Ok(())
 }

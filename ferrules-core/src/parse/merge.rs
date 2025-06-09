@@ -5,6 +5,7 @@ use tracing::instrument;
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
     entities::{Element, ElementID, ElementType, Line, PageID},
+    error::FerrulesError,
     layout::model::LayoutBBox,
 };
 
@@ -69,7 +70,7 @@ pub(crate) fn merge_lines_layout(
     layout_boxes: &[LayoutBBox],
     lines: &[Line],
     page_id: usize,
-) -> anyhow::Result<Vec<Element>> {
+) -> Result<Vec<Element>, FerrulesError> {
     let line_block_iterator = lines.iter().map(|line| {
         // TODO: the max here is sometimes very far away from the line.
         // ex: megatrends.pdf, header is categorized as text-block but the intersection  happens
@@ -138,7 +139,7 @@ pub(crate) fn merge_lines_layout(
                     merge_or_create_elements(&mut elements, line, line_layout_block, page_id);
                 }
             },
-            // Line is detected but isn't assignable to some layout element
+            // Line is detected but isn't assignable to some layout element, for now skip
             None => {
                 // TODO:
                 // Check distance between line and the last element
@@ -199,7 +200,7 @@ pub(crate) fn merge_remaining(
 pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
-) -> anyhow::Result<Vec<Block>> {
+) -> Result<Vec<Block>, FerrulesError> {
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks = Vec::new();

@@ -4,6 +4,7 @@ use imageproc::rect::Rect;
 
 use crate::blocks::Block;
 use crate::entities::Line;
+use crate::error::FerrulesError;
 use crate::layout::model::LayoutBBox;
 use crate::ocr::OCRLines;
 
@@ -24,7 +25,7 @@ pub(crate) fn draw_text_lines(
     lines: &[Line],
     page_img: &DynamicImage,
     is_ocr: bool,
-) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, FerrulesError> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
 

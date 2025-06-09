@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Instant};
 
-use anyhow::Context;
 use image::DynamicImage;
 use model::{LayoutBBox, ORTLayoutParser};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -8,6 +7,7 @@ use tokio::sync::{oneshot, Semaphore};
 use tracing::{Instrument, Span};
 
 use crate::entities::PageID;
+use crate::error::FerrulesError;
 
 pub mod model;
 
@@ -48,12 +48,12 @@ impl ParseLayoutQueue {
         }
     }
 
-    pub(crate) async fn push(&self, req: ParseLayoutRequest) -> anyhow::Result<()> {
+    pub(crate) async fn push(&self, req: ParseLayoutRequest) -> Result<(), FerrulesError> {
         let span = Span::current();
         self.queue
             .send((req, span))
             .await
-            .context("error sending  parse req")
+            .map_err(|_| FerrulesError::LayoutParsingError)
     }
 }
 

@@ -1,3 +1,4 @@
+use anyhow::bail;
 use clap::Parser;
 
 use ferrules_core::{
@@ -251,7 +252,7 @@ async fn main() {
         page_range,
         debug_dir: debug_path,
     };
-    let doc = parser
+    let doc = match parser
         .parse_document(
             &mmap,
             doc_name,
@@ -262,7 +263,21 @@ async fn main() {
             }),
         )
         .await
-        .unwrap();
+    {
+        Ok(result) => result,
+        Err(e) => match e {
+            ferrules_core::error::FerrulesError::ParseNativeError => todo!(),
+            ferrules_core::error::FerrulesError::LayoutParsingError => todo!(),
+            ferrules_core::error::FerrulesError::LineMergeError => todo!(),
+            ferrules_core::error::FerrulesError::BlockMergeError {
+                block_id,
+                kind,
+                element,
+            } => todo!(),
+            ferrules_core::error::FerrulesError::DebugPageError { tmp_dir, page_idx } => todo!(),
+            ferrules_core::error::FerrulesError::ParseTextError { tmp_dir, page_idx } => todo!(),
+        },
+    };
 
     pb.finish_with_message(format!(
         "Parsed document in {}ms",

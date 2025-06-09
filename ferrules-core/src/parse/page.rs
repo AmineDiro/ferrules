@@ -5,13 +5,13 @@ use std::{
     time::Instant,
 };
 
-use anyhow::Context;
 use image::DynamicImage;
 use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
     entities::{Element, Line, PageID, StructuredPage},
+    error::FerrulesError,
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
@@ -46,7 +46,7 @@ fn build_page_elements(
     page_layout: &[LayoutBBox],
     text_lines: &[Line],
     page_idx: PageID,
-) -> anyhow::Result<Vec<Element>> {
+) -> Result<Vec<Element>, FerrulesError> {
     let mut elements = merge_lines_layout(page_layout, text_lines, page_idx)?;
     let merged_layout_blocks_ids = elements
         .iter()
@@ -67,7 +67,7 @@ fn parse_page_text(
     page_layout: &[LayoutBBox],
     page_image: &DynamicImage,
     downscale_factor: f32,
-) -> anyhow::Result<(Vec<Line>, bool)> {
+) -> Result<(Vec<Line>, bool), FerrulesError> {
     let text_layout_box: Vec<&LayoutBBox> =
         page_layout.iter().filter(|b| b.is_text_block()).collect();
     let need_ocr = page_needs_ocr(&text_layout_box, &native_text_lines);
@@ -104,7 +104,7 @@ pub async fn parse_page_full(
     parse_native_result: ParseNativePageResult,
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
-) -> anyhow::Result<StructuredPage> {
+) -> Result<StructuredPage, FerrulesError> {
     let span = tracing::Span::current();
     let ParseNativePageResult {
         page_id,
@@ -135,8 +135,9 @@ pub async fn parse_page_full(
         layout_queue_time_ms,
     } = layout_rx
         .await
-        .context("error receiving layout on oneshot channel")?
-        .context("error parsing page")?;
+        // TODO: better unwrapping
+        .map_err(|_| FerrulesError::LayoutParsingError)?
+        .map_err(|_| FerrulesError::LayoutParsingError)?;
 
     let (text_lines, need_ocr) =
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
@@ -190,18 +191,40 @@ fn debug_page(
     need_ocr: bool,
     page_layout: &[LayoutBBox],
     elements: &[Element],
-) -> anyhow::Result<()> {
+) -> Result<(), FerrulesError> {
     let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
     let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
-    let out_img = draw_text_lines(text_lines, page_image, need_ocr)?;
-    let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
+    let out_img = draw_text_lines(text_lines, page_image, need_ocr).map_err(|_| {
+        FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        }
+    })?;
+    let out_img = draw_layout_bboxes(page_layout, &out_img.into()).map_err(|_| {
+        FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        }
+    })?;
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
     let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
-    let final_img = draw_blocks(&blocks, page_image)?;
-    out_img.save(output_file)?;
+    let final_img =
+        draw_blocks(&blocks, page_image).map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })?;
+    out_img
+        .save(output_file)
+        .map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })?;
 
     final_img
         .save(final_output_file)
-        .context("error saving image")
+        .map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })
 }
