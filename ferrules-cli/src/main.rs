@@ -1,5 +1,7 @@
-use anyhow::bail;
 use clap::Parser;
+
+mod error_formatter;
+use error_formatter::format_error;
 
 use ferrules_core::{
     layout::model::{ORTConfig, OrtExecutionProvider},
@@ -174,7 +176,24 @@ fn setup_progress_bar(
     password: Option<&str>,
     page_range: Option<Range<usize>>,
 ) -> ProgressBar {
-    let length_pages = get_doc_length(file_path, password, page_range.clone()).unwrap();
+    let length_pages = match get_doc_length(file_path, password, page_range.clone()) {
+        Ok(pages) => pages,
+        Err(e) => {
+            format_error(
+                "Document Length Detection Failed",
+                "Failed to determine the number of pages in the document.",
+                vec![
+                    ("File", file_path.display().to_string()),
+                    ("Error", e.to_string()),
+                    (
+                        "Suggestion",
+                        "Check if the file exists and is a valid PDF".to_string(),
+                    ),
+                ],
+            );
+            std::process::exit(1);
+        }
+    };
     let pb = ProgressBar::new(length_pages as u64);
     pb.set_style(
         ProgressStyle::with_template(
@@ -223,9 +242,27 @@ async fn main() {
     // Global tasks
     let parser = FerrulesParser::new(ort_config);
 
-    let page_range = args
-        .page_range
-        .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
+    let page_range = match args.page_range {
+        Some(ref page_range_str) => match parse_page_range(page_range_str) {
+            Ok(range) => Some(range),
+            Err(e) => {
+                format_error(
+                    "Invalid Page Range",
+                    &e.to_string(),
+                    vec![
+                        ("Input", page_range_str.clone()),
+                        (
+                            "Format",
+                            "Use '1-5' for range or '1' for single page".to_string(),
+                        ),
+                        ("Note", "Page numbers start from 1".to_string()),
+                    ],
+                );
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
 
     let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
     let pbc = pb.clone();
@@ -241,10 +278,62 @@ async fn main() {
     // TODO: refac this
     let save_figs = args.html | args.save_images;
     let (output_dir_path, debug_path) =
-        create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs).unwrap();
+        match create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs) {
+            Ok(paths) => paths,
+            Err(e) => {
+                format_error(
+                    "Directory Creation Failed",
+                    "Failed to create output directories.",
+                    vec![
+                        (
+                            "Output Directory",
+                            args.output_dir
+                                .as_ref()
+                                .map_or("current directory".to_string(), |p| {
+                                    p.display().to_string()
+                                }),
+                        ),
+                        ("Document Name", doc_name.clone()),
+                        ("Error", e.to_string()),
+                    ],
+                );
+                std::process::exit(1);
+            }
+        };
     // TODO : refac memap
-    let file = File::open(&args.file_path).await.unwrap();
-    let mmap = unsafe { Mmap::map(&file).unwrap() };
+    let file = match File::open(&args.file_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            format_error(
+                "File Open Failed",
+                "Failed to open the PDF file for processing.",
+                vec![
+                    ("File", args.file_path.display().to_string()),
+                    ("Error", e.to_string()),
+                    (
+                        "Suggestion",
+                        "Check file permissions and ensure the file exists".to_string(),
+                    ),
+                ],
+            );
+            std::process::exit(1);
+        }
+    };
+    let mmap = match unsafe { Mmap::map(&file) } {
+        Ok(m) => m,
+        Err(e) => {
+            format_error(
+                "Memory Mapping Failed",
+                "Failed to memory-map the PDF file.",
+                vec![
+                    ("File", args.file_path.display().to_string()),
+                    ("Error", e.to_string()),
+                    ("Suggestion", "Check available system memory".to_string()),
+                ],
+            );
+            std::process::exit(1);
+        }
+    };
 
     let config = FerrulesParseConfig {
         password: None,
@@ -265,23 +354,132 @@ async fn main() {
         .await
     {
         Ok(result) => result,
-        Err(e) => match e {
-            ferrules_core::error::FerrulesError::ParseNativeError => todo!(),
-            ferrules_core::error::FerrulesError::LayoutParsingError => todo!(),
-            ferrules_core::error::FerrulesError::LineMergeError => todo!(),
-            ferrules_core::error::FerrulesError::BlockMergeError {
-                block_id,
-                kind,
-                element,
-            } => todo!(),
-            ferrules_core::error::FerrulesError::DebugPageError { tmp_dir, page_idx } => todo!(),
-            ferrules_core::error::FerrulesError::ParseTextError { tmp_dir, page_idx } => todo!(),
-        },
+        Err(e) => {
+            match e {
+                ferrules_core::error::FerrulesError::ParseNativeError => {
+                    format_error(
+                        "Native PDF Parsing Failed",
+                        "Failed to parse the PDF file using the native parser.",
+                        vec![
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "Check if the PDF file is valid and not corrupted".to_string(),
+                            ),
+                        ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::LayoutParsingError => {
+                    format_error(
+                        "Layout Detection Failed",
+                        "Failed to detect document layout structure.",
+                        vec![
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "Try using a different execution provider (--cuda, --coreml)"
+                                    .to_string(),
+                            ),
+                        ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::LineMergeError => {
+                    format_error(
+                        "Line Merging Failed",
+                        "Failed to merge text lines during document processing.",
+                        vec![
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "This might indicate complex text layout in the PDF".to_string(),
+                            ),
+                        ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::BlockMergeError {
+                    block_id,
+                    kind,
+                    element,
+                } => {
+                    format_error(
+                        "Block Merge Error",
+                        "Failed to merge document blocks during processing.",
+                        vec![
+                            ("Block ID", block_id.to_string()),
+                            ("Block Type", kind.to_string()),
+                            ("Page Number", element.page_id.to_string()),
+                            ("Element", format!("{}-{}", element.id, element.kind)),
+                            ("File", args.file_path.display().to_string()),
+                        ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::DebugPageError { tmp_dir, page_idx } => {
+                    format_error(
+                        "Debug Page Processing Failed",
+                        "Failed to process page in debug mode.",
+                        vec![
+                            ("Page", format!("#{}", page_idx + 1)),
+                            ("Debug Directory", tmp_dir.display().to_string()),
+                            ("File", args.file_path.display().to_string()),
+                        ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::ParseTextError { tmp_dir, page_idx } => {
+                    format_error(
+                        "Text Extraction Failed",
+                        "Failed to extract text from document page.",
+                        vec![
+                            ("Page", format!("#{}", page_idx + 1)),
+                            ("Temp Directory", tmp_dir.display().to_string()),
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "Try processing a different page range with --page-range"
+                                    .to_string(),
+                            ),
+                        ],
+                    );
+                }
+            }
+            std::process::exit(1);
+        }
     };
 
     pb.finish_with_message(format!(
         "Parsed document in {}ms",
         doc.metadata.parsing_duration.as_millis()
     ));
-    save_parsed_document(&doc, output_dir_path, args.save_images, args.html, args.md).unwrap();
+    if let Err(e) = save_parsed_document(
+        &doc,
+        output_dir_path.clone(),
+        args.save_images,
+        args.html,
+        args.md,
+    ) {
+        format_error(
+            "Document Save Failed",
+            "Failed to save the parsed document.",
+            vec![
+                ("Output Directory", output_dir_path.display().to_string()),
+                ("Error", e.to_string()),
+                ("Formats", {
+                    let mut formats = vec![];
+                    if args.html {
+                        formats.push("HTML");
+                    }
+                    if args.md {
+                        formats.push("Markdown");
+                    }
+                    if args.save_images {
+                        formats.push("Images");
+                    }
+                    if formats.is_empty() {
+                        formats.push("Default");
+                    }
+                    formats.join(", ")
+                }),
+            ],
+        );
+        std::process::exit(1);
+    }
 }

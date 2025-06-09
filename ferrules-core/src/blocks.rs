@@ -46,6 +46,12 @@ pub enum BlockType {
     Table,
 }
 
+impl std::fmt::Display for BlockType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Block {
     pub id: usize,

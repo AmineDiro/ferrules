@@ -157,6 +157,11 @@ pub enum ElementType {
     Image,
     Table,
 }
+impl std::fmt::Display for ElementType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Element {
