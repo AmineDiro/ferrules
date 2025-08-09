@@ -1,10 +1,16 @@
-FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04 as builder
+ARG CUDA_VERSION=12.3.2
+ARG UBUNTU_VERSION=22.04
+ARG RUST_VERSION=stable
+
+# Builder stage
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn9-devel-ubuntu${UBUNTU_VERSION} as builder
+
+ARG RUST_VERSION
 
 WORKDIR /app
-# Update default packages
-RUN apt-get update
-# Get Ubuntu packages
-RUN apt-get install -y \
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     clang \
@@ -15,18 +21,21 @@ RUN apt-get install -y \
     libssl-dev \
     zlib1g-dev \
     libtinfo-dev \
-    libxml2-dev
+    libxml2-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Get Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION}
 ENV PATH="/root/.cargo/bin:${PATH}"
-COPY . .
 
-# Build ferrules-api
+# Copy and build
+COPY . .
 RUN cargo build --release -p ferrules-api
 
 # Runtime stage
-FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn9-runtime-ubuntu${UBUNTU_VERSION}
+
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
