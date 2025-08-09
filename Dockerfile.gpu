@@ -1,0 +1,46 @@
+FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04 as builder
+
+WORKDIR /app
+# Update default packages
+RUN apt-get update
+# Get Ubuntu packages
+RUN apt-get install -y \
+    build-essential \
+    cmake \
+    clang \
+    libclang-dev \
+    curl \
+    xz-utils \
+    pkg-config \
+    libssl-dev \
+    zlib1g-dev \
+    libtinfo-dev \
+    libxml2-dev
+
+# Get Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+COPY . .
+
+# Build ferrules-api
+RUN cargo build --release -p ferrules-api
+
+# Runtime stage
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set CUDA paths
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
+# Copy the binary and libs from builder
+COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
+COPY --from=builder /app/target/release/*onnxruntime*.so* /usr/local/lib/
+
+RUN ldconfig
+
+ENTRYPOINT ["/app/ferrules-api","--cuda","-j2","-O3"]

@@ -18,7 +18,7 @@ COPY . .
 RUN cargo build --release -p ferrules-api
 
 # Runtime stage
-FROM debian:bullseye-slim AS runtime
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
 # Install runtime dependencies
@@ -27,7 +27,9 @@ RUN apt-get update -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the binary from builder
+# Copy the binary and libs from builder
+COPY --from=builder /app/target/release/libonnxruntime*.so /usr/local/lib/
+RUN ldconfig
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
 
 # Set the entrypoint
