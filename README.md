@@ -14,34 +14,30 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 ## Features
 
 - **📄 PDF Parsing and Layout Extraction:**
-
-  - Utilizes `pdfium2` to parse documents.
-  - Supports OCR using Apple's Vision on macOS (using `objc2` Rust bindings and [`VNRecognizeTextRequest`](https://developer.apple.com/documentation/vision/vnrecognizetextrequest) functionality).
-  - Extracts and analyzes **page layouts** with advanced preprocessing and postprocessing techniques.
-  - Accelerate model inference on Apple Neural Engine (ANE)/GPU (using [`ort`](https://ort.pyke.io/) library).
-  - Merges layout with PDF text lines for comprehensive document understanding.
+    - Utilizes `pdfium2` to parse documents.
+    - Supports OCR using Apple's Vision on macOS (using `objc2` Rust bindings and [`VNRecognizeTextRequest`](https://developer.apple.com/documentation/vision/vnrecognizetextrequest) functionality).
+    - Extracts and analyzes **page layouts** with advanced preprocessing and postprocessing techniques.
+    - Accelerate model inference on Apple Neural Engine (ANE)/GPU (using [`ort`](https://ort.pyke.io/) library).
+    - Merges layout with PDF text lines for comprehensive document understanding.
 
 - **🔄 Document Transformation:**
-
-  - Groups captions, footers, and other elements intelligently.
-  - Structures lists and merges blocks into cohesive sections.
-  - Detects headings and titles using machine learning for logical document structuring.
+    - Groups captions, footers, and other elements intelligently.
+    - Structures lists and merges blocks into cohesive sections.
+    - Detects headings and titles using machine learning for logical document structuring.
 
 - **🖨️ Rendering:** Provides HTML, Markdown, and JSON rendering options for versatile use cases.
 
 - **⚡ High Performance & Easy Deployment:**
-
-  - Built with **Rust** for maximum speed and efficiency
-  - Zero-dependency deployment (no Python runtime required !)
-  - Hardware-accelerated ML inference (Apple Neural Engine, GPU)
-  - Designed for production environments with minimal setup
+    - Built with **Rust** for maximum speed and efficiency
+    - Zero-dependency deployment (no Python runtime required !)
+    - Hardware-accelerated ML inference (Apple Neural Engine, GPU)
+    - Designed for production environments with minimal setup
 
 - **⚙️ Advanced Functionalities:** : Offers configurable inference parameters for optimized processing (COMING SOON)
 
 - **🛠️ API and CLI:**
-
-  - Provides both a CLI and API interface
-  - Supports tracing
+    - Provides both a CLI and API interface
+    - Supports tracing
 
 ## Installation
 
@@ -53,9 +49,9 @@ Ferrules provides precompiled binaries for macOS, available for download from th
 
 2. Verify the installation:
 
-   ```sh
-   ferrules --version
-   ```
+    ```sh
+    ferrules --version
+    ```
 
 ### Linux Installation
 
@@ -156,21 +152,32 @@ You can also configure some options through environment variables:
 
 ### 2. HTTP API Server
 
-Ferrules also provides an HTTP API server for integration into existing systems. To start the API server:
+Ferrules also provides an HTTP API server for integration into existing systems.
+
+#### Running locally
+
+To start the API server locally:
 
 ```sh
 ferrules-api
 ```
 
-By default, the server listens on `0.0.0.0:3002`. For detailed API documentation, see [API.md](./API.md).
+#### Running with Docker (NVIDIA GPU)
+
+For systems with NVIDIA GPU support, you can run the API server using Docker:
+
+```sh
+docker run -p 3002:3002 --gpus all aminediro/ferrules-api-gpu
+```
+
+By default, the server listens on `0.0.0.0:3002`. For detailed API documentation and additional running options, see [API.md](./API.md).
 
 ## Resources:
 
 - Apple vision text detection:
-
-  - https://github.com/straussmaximilian/ocrmac/blob/main/ocrmac/ocrmac.py
-  - https://docs.rs/objc2-vision/latest/objc2_vision/index.html
-  - https://developer.apple.com/documentation/vision/recognizing-text-in-images
+    - https://github.com/straussmaximilian/ocrmac/blob/main/ocrmac/ocrmac.py
+    - https://docs.rs/objc2-vision/latest/objc2_vision/index.html
+    - https://developer.apple.com/documentation/vision/recognizing-text-in-images
 
 - `ort` : https://ort.pyke.io/
 
