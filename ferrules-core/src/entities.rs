@@ -11,6 +11,7 @@ pub type PageID = usize;
 pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -155,6 +156,11 @@ pub enum ElementType {
     Caption,
     Image,
     Table,
+}
+impl std::fmt::Display for ElementType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

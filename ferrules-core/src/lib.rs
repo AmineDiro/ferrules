@@ -43,10 +43,7 @@
 //!     let parsed_doc = parser.parse_document(
 //!         &doc_bytes,
 //!         "document".into(),
-//!         None,           // No password
-//!         true,          // Flatten
-//!         None,          // Process all pages
-//!         None,          // No debug output
+//!         Default::default(),
 //!         None,          // No progress callback
 //!     ).await?;
 //!
@@ -85,6 +82,7 @@ pub(crate) mod draw;
 
 pub mod blocks;
 pub mod entities;
+pub mod error;
 pub mod layout;
 pub mod ocr;
 pub mod render;

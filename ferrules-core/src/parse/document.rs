@@ -11,6 +11,7 @@ use super::{
     titles::title_levels_kmeans,
 };
 use crate::entities::DocumentMetadata;
+use crate::error::FerrulesError;
 use crate::{
     entities::{ElementType, Page, PageID, ParsedDocument, StructuredPage},
     layout::{
@@ -54,7 +55,7 @@ async fn parse_task<F>(
     layout_queue: ParseLayoutQueue,
     debug_dir: Option<PathBuf>,
     callback: Option<F>,
-) -> anyhow::Result<StructuredPage>
+) -> Result<StructuredPage, FerrulesError>
 where
     F: FnOnce(PageID) + Send + 'static + Clone,
 {
@@ -132,7 +133,7 @@ impl FerrulesParser {
         doc_name: String,
         config: FerrulesParseConfig<'_>,
         page_callback: Option<F>,
-    ) -> anyhow::Result<ParsedDocument>
+    ) -> Result<ParsedDocument, FerrulesError>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
     {
@@ -200,7 +201,7 @@ impl FerrulesParser {
         page_range: Option<Range<usize>>,
         debug_dir: Option<PathBuf>,
         callback: Option<F>,
-    ) -> anyhow::Result<Vec<StructuredPage>>
+    ) -> Result<Vec<StructuredPage>, FerrulesError>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
     {
