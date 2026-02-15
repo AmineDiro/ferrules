@@ -29,6 +29,36 @@ pub struct List {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TableBlock {
+    pub(crate) id: usize,
+    pub(crate) caption: Option<String>,
+    pub rows: Vec<TableRow>,
+    pub has_borders: bool,
+}
+
+impl TableBlock {
+    pub(crate) fn path(&self) -> String {
+        format!("table_{}.png", self.id)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+    pub is_header: bool,
+    pub bbox: BBox,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TableCell {
+    pub content: Vec<Block>,
+    pub text: String,
+    pub row_span: u8,
+    pub col_span: u8,
+    pub bbox: BBox,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Title {
     pub level: TitleLevel,
     pub text: String,
@@ -43,7 +73,7 @@ pub enum BlockType {
     ListBlock(List),
     TextBlock(TextBlock),
     Image(ImageBlock),
-    Table,
+    Table(TableBlock),
 }
 
 impl std::fmt::Display for BlockType {
@@ -121,7 +151,21 @@ impl Block {
             }
             BlockType::Title(_title) => todo!(),
             BlockType::Image(_image_block) => todo!(),
-            BlockType::Table => todo!(),
+            BlockType::Table(table) => {
+                if let ElementType::Table(incoming_table_opt) = &element.kind {
+                    self.bbox.merge(&element.bbox);
+                    if let Some(incoming_table) = incoming_table_opt {
+                        table.rows.extend(incoming_table.rows.clone());
+                    }
+                    Ok(())
+                } else {
+                    Err(FerrulesError::BlockMergeError {
+                        element,
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
+                }
+            }
         }
     }
 
@@ -133,7 +177,7 @@ impl Block {
             BlockType::Title(_) => "TITLE",
             BlockType::ListBlock(_) => "LIST",
             BlockType::Image(_) => "IMAGE",
-            BlockType::Table => "TABLE",
+            BlockType::Table(_) => "TABLE",
         }
     }
 }

@@ -16,6 +16,8 @@ const BLOCK_COLOR: [u8; 4] = [209, 139, 0, 255];
 const LAYOUT_COLOR: [u8; 4] = [0, 0, 255, 255];
 const LINE_OCR_COLOR: [u8; 4] = [17, 138, 1, 255];
 const LINE_PDFIRUM_COLOR: [u8; 4] = [255, 0, 0, 255];
+const TABLE_ROW_COLOR: [u8; 4] = [0, 0, 255, 255]; // Blue
+const TABLE_CELL_COLOR: [u8; 4] = [255, 0, 0, 255]; // Red
 
 fn load_font() -> FontArc {
     FontArc::try_from_slice(FONT_BYTES).unwrap()
@@ -135,29 +137,181 @@ pub(crate) fn draw_blocks(
 
     let font: FontArc = load_font();
     for block in bboxes {
-        let x0 = block.bbox.x0 as i32;
-        let y0 = block.bbox.y0 as i32;
-        let x1 = block.bbox.x1 as i32;
-        let y1 = block.bbox.y1 as i32;
+        match &block.kind {
+            crate::blocks::BlockType::Table(table) => {
+                draw_table_structure(table, &mut out_img);
+            }
+            _ => {
+                let x0 = block.bbox.x0 as i32;
+                let y0 = block.bbox.y0 as i32;
+                let x1 = block.bbox.x1 as i32;
+                let y1 = block.bbox.y1 as i32;
 
-        let width = (x1 - x0).max(1) as u32;
-        let height = (y1 - y0).max(1) as u32;
+                let width = (x1 - x0).max(1) as u32;
+                let height = (y1 - y0).max(1) as u32;
 
-        let rect = Rect::at(x0, y0).of_size(width, height);
+                let rect = Rect::at(x0, y0).of_size(width, height);
 
-        draw_hollow_rect_mut(&mut out_img, rect, Rgba(BLOCK_COLOR));
-        let scale = 70;
-        let legend_size = page_img.width().max(page_img.height()) / scale;
-        imageproc::drawing::draw_text_mut(
-            &mut out_img,
-            image::Rgba(BLOCK_COLOR),
-            block.bbox.x0 as i32,
-            (block.bbox.y0 - legend_size as f32) as i32,
-            legend_size as f32,
-            &font,
-            block.label(),
-        );
+                draw_hollow_rect_mut(&mut out_img, rect, Rgba(BLOCK_COLOR));
+                let scale = 70;
+                let legend_size = page_img.width().max(page_img.height()) / scale;
+                imageproc::drawing::draw_text_mut(
+                    &mut out_img,
+                    image::Rgba(BLOCK_COLOR),
+                    block.bbox.x0 as i32,
+                    (block.bbox.y0 - legend_size as f32) as i32,
+                    legend_size as f32,
+                    &font,
+                    block.label(),
+                );
+            }
+        }
     }
 
     Ok(out_img)
+}
+
+fn draw_table_structure(
+    table_block: &crate::blocks::TableBlock,
+    out_img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+) {
+    // Draw Table BBox
+    // We can assume the table block itself is drawn by the caller if needed,
+    // but here we focus on internal structure.
+
+    // Draw Rows
+    for row in &table_block.rows {
+        let x0 = row.bbox.x0 as i32;
+        let y0 = row.bbox.y0 as i32;
+        let x1 = row.bbox.x1 as i32;
+        let y1 = row.bbox.y1 as i32;
+        let width = (x1 - x0).max(1) as u32;
+        let height = (y1 - y0).max(1) as u32;
+        let rect = Rect::at(x0, y0).of_size(width, height);
+        draw_hollow_rect_mut(out_img, rect, Rgba(TABLE_ROW_COLOR));
+
+        // Draw Cells
+        for cell in &row.cells {
+            let x0 = cell.bbox.x0 as i32;
+            let y0 = cell.bbox.y0 as i32;
+            let x1 = cell.bbox.x1 as i32;
+            let y1 = cell.bbox.y1 as i32;
+            let width = (x1 - x0).max(1) as u32;
+            let height = (y1 - y0).max(1) as u32;
+            let rect = Rect::at(x0, y0).of_size(width, height);
+            draw_hollow_rect_mut(out_img, rect, Rgba(TABLE_CELL_COLOR));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blocks::{TableBlock, TableCell, TableRow};
+    use crate::entities::BBox;
+    use image::RgbaImage;
+
+    #[test]
+    fn test_draw_table_structure() {
+        let page_img = DynamicImage::ImageRgba8(RgbaImage::new(100, 100));
+        let mut out_img = page_img.to_rgba8();
+
+        // Create dummy table
+        let table_block = TableBlock {
+            id: 1,
+            caption: None,
+            has_borders: true,
+            rows: vec![
+                TableRow {
+                    is_header: true,
+                    bbox: BBox {
+                        x0: 10.0,
+                        y0: 10.0,
+                        x1: 90.0,
+                        y1: 30.0,
+                    },
+                    cells: vec![
+                        TableCell {
+                            text: "Header".to_string(),
+                            bbox: BBox {
+                                x0: 10.0,
+                                y0: 10.0,
+                                x1: 50.0,
+                                y1: 30.0,
+                            },
+                            row_span: 1,
+                            col_span: 1,
+                            content: vec![],
+                        },
+                        TableCell {
+                            text: "Header 2".to_string(),
+                            bbox: BBox {
+                                x0: 50.0,
+                                y0: 10.0,
+                                x1: 90.0,
+                                y1: 30.0,
+                            },
+                            row_span: 1,
+                            col_span: 1,
+                            content: vec![],
+                        },
+                    ],
+                },
+                TableRow {
+                    is_header: false,
+                    bbox: BBox {
+                        x0: 10.0,
+                        y0: 30.0,
+                        x1: 90.0,
+                        y1: 50.0,
+                    },
+                    cells: vec![
+                        TableCell {
+                            text: "Cell 1".to_string(),
+                            bbox: BBox {
+                                x0: 10.0,
+                                y0: 30.0,
+                                x1: 50.0,
+                                y1: 50.0,
+                            },
+                            row_span: 1,
+                            col_span: 1,
+                            content: vec![],
+                        },
+                        TableCell {
+                            text: "Cell 2".to_string(),
+                            bbox: BBox {
+                                x0: 50.0,
+                                y0: 30.0,
+                                x1: 90.0,
+                                y1: 50.0,
+                            },
+                            row_span: 1,
+                            col_span: 1,
+                            content: vec![],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        // Directly call the internal function to test it
+        draw_table_structure(&table_block, &mut out_img);
+
+        // Also test via draw_blocks
+        let block = crate::blocks::Block {
+            id: 1,
+            kind: crate::blocks::BlockType::Table(table_block),
+            pages_id: vec![0],
+            bbox: BBox {
+                x0: 10.0,
+                y0: 10.0,
+                x1: 90.0,
+                y1: 50.0,
+            },
+        };
+
+        let result = draw_blocks(&[block], &page_img);
+        assert!(result.is_ok());
+    }
 }

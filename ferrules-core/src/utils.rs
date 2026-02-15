@@ -80,7 +80,7 @@ fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> 
                     None => continue,
                 }
             }
-            blocks::BlockType::Table => todo!(),
+            blocks::BlockType::Table(_) => todo!(),
             _ => continue,
         }
     }

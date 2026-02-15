@@ -5,7 +5,10 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::{blocks::Block, layout::model::LayoutBBox};
+use crate::{
+    blocks::{Block, TableBlock},
+    layout::model::LayoutBBox,
+};
 
 pub type PageID = usize;
 pub type ElementID = usize;
@@ -155,7 +158,7 @@ pub enum ElementType {
     ListItem,
     Caption,
     Image,
-    Table,
+    Table(Option<TableBlock>),
 }
 impl std::fmt::Display for ElementType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -184,7 +187,7 @@ impl Element {
             "Page-header" => ElementType::Header,
             "Title" => ElementType::Title,
             "Section-header" => ElementType::Subtitle,
-            "Table" => ElementType::Table,
+            "Table" => ElementType::Table(None),
             "Picture" => ElementType::Image,
             _ => {
                 unreachable!("can't have other type of layout bbox")
@@ -256,7 +259,7 @@ pub struct ParsedDocument {
     pub metadata: DocumentMetadata,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CharSpan {
     pub bbox: BBox,
     pub text: String,
@@ -305,7 +308,7 @@ impl CharSpan {
         }
     }
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Line {
     pub text: String,
     pub bbox: BBox,
@@ -366,6 +369,20 @@ impl Line {
             Ok(())
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum Segment {
+    Line { start: (f32, f32), end: (f32, f32) },
+    Rect { bbox: BBox },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PDFPath {
+    pub segments: Vec<Segment>,
+    pub is_stroke: bool,
+    pub is_fill: bool,
+    pub stroke_width: Option<f32>,
 }
 
 #[cfg(test)]

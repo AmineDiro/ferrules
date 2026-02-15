@@ -18,6 +18,7 @@ use crate::{
         model::{ORTConfig, ORTLayoutParser},
         ParseLayoutQueue,
     },
+    parse::table::{ParseTableQueue, TableParser, TableTransformer},
 };
 
 /// Configuration options for parsing documents with FerrulesParser
@@ -53,6 +54,7 @@ impl Default for FerrulesParseConfig<'_> {
 async fn parse_task<F>(
     parse_native_result: ParseNativePageResult,
     layout_queue: ParseLayoutQueue,
+    table_queue: ParseTableQueue,
     debug_dir: Option<PathBuf>,
     callback: Option<F>,
 ) -> Result<StructuredPage, FerrulesError>
@@ -61,7 +63,13 @@ where
 {
     let page_id = parse_native_result.page_id;
 
-    let result = parse_page_full(parse_native_result, debug_dir, layout_queue.clone()).await;
+    let result = parse_page_full(
+        parse_native_result,
+        debug_dir,
+        layout_queue.clone(),
+        table_queue.clone(),
+    )
+    .await;
     if let Some(callback) = callback {
         callback(page_id)
     }
@@ -76,6 +84,7 @@ where
 pub struct FerrulesParser {
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
+    table_queue: ParseTableQueue,
 }
 
 impl FerrulesParser {
@@ -91,12 +100,16 @@ impl FerrulesParser {
     /// Panics if the layout model cannot be loaded with the given configuration
     pub fn new(layout_config: ORTConfig) -> Self {
         let layout_model =
-            Arc::new(ORTLayoutParser::new(layout_config).expect("can't load layout model"));
+            Arc::new(ORTLayoutParser::new(layout_config.clone()).expect("can't load layout model"));
         let native_queue = ParseNativeQueue::new();
         let layout_queue = ParseLayoutQueue::new(layout_model);
+        let transformer = TableTransformer::new(&layout_config).ok();
+        let table_parser = Arc::new(TableParser::new(transformer));
+        let table_queue = ParseTableQueue::new(table_parser);
         Self {
             layout_queue,
             native_queue,
+            table_queue,
         }
     }
     /// Parses a document into a structured format with optional page-level progress callback
@@ -219,6 +232,7 @@ impl FerrulesParser {
                         parse_task(
                             parse_native_result,
                             self.layout_queue.clone(),
+                            self.table_queue.clone(),
                             tmp_dir,
                             callback,
                         )

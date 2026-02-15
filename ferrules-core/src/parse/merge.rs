@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tracing::instrument;
 
 use crate::{
-    blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
+    blocks::{Block, BlockType, ImageBlock, List, TableBlock, TextBlock, Title, TitleLevel},
     entities::{Element, ElementID, ElementType, Line, PageID},
     error::FerrulesError,
     layout::model::LayoutBBox,
@@ -209,27 +209,27 @@ pub(crate) fn merge_elements_into_blocks(
     while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
             ElementType::Text => {
-                let text_block = Block {
+                let mut text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: curr_el.text_block.text,
+                        text: curr_el.text_block.text.clone(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
                 };
-                // TODO : Change this to use some minimum gap
+                // TODO: This might be a bug here
                 // Check to see if we have another text block that is close
-                // while let Some(next_el) = element_it.peek() {
-                //     if matches!(next_el.kind, crate::entities::ElementType::Text(_))
-                //         && (curr_el.bbox.distance(&next_el.bbox, 1.0, 1.0)
-                //             < MAXIMUM_ASSIGNMENT_DISTANCE)
-                //     {
-                //         text_block.merge(next_el)?;
-                //         element_it.next();
-                //     } else {
-                //         break;
-                //     }
-                // }
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::Text)
+                        && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                            < MAXIMUM_ASSIGNMENT_DISTANCE)
+                    {
+                        let next_el = element_it.next().unwrap();
+                        text_block.merge(next_el)?;
+                    } else {
+                        break;
+                    }
+                }
                 block_id += 1;
                 blocks.push(text_block);
             }
@@ -431,8 +431,20 @@ pub(crate) fn merge_elements_into_blocks(
                 block_id += 1;
                 blocks.push(title);
             }
-            _ => {
-                continue;
+            ElementType::Table(table_opt) => {
+                let table_block = Block {
+                    id: block_id,
+                    kind: BlockType::Table(table_opt.clone().unwrap_or_else(|| TableBlock {
+                        id: block_id,
+                        caption: None,
+                        rows: Vec::new(),
+                        has_borders: false,
+                    })),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox,
+                };
+                block_id += 1;
+                blocks.push(table_block);
             }
         }
     }
@@ -771,6 +783,48 @@ mod tests {
         } else {
             panic!("Expected Image block with footnote as caption");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_consecutive_tables() -> anyhow::Result<()> {
+        let table1_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let table2_bbox = BBox {
+            x0: 0.0,
+            y0: 2.5,
+            x1: 2.0,
+            y1: 4.5,
+        };
+
+        let elements = vec![
+            Element {
+                id: 0,
+                layout_block_id: 0,
+                kind: ElementType::Table(None),
+                text_block: ElementText::default(),
+                page_id: 1,
+                bbox: table1_bbox,
+            },
+            Element {
+                id: 1,
+                layout_block_id: 1,
+                kind: ElementType::Table(None),
+                text_block: ElementText::default(),
+                page_id: 1,
+                bbox: table2_bbox,
+            },
+        ];
+
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(blocks[0].kind, BlockType::Table(_)));
+        assert!(matches!(blocks[1].kind, BlockType::Table(_)));
         Ok(())
     }
 }

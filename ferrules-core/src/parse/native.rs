@@ -1,11 +1,12 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use image::DynamicImage;
-use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use pdfium_render::prelude::*;
+
 use tracing::{instrument, Span};
 
 use crate::{
-    entities::{BBox, CharSpan, Line, PageID},
+    entities::{BBox, CharSpan, Line, PDFPath, PageID, Segment},
     error::FerrulesError,
     layout::model::ORTLayoutParser,
 };
@@ -96,6 +97,7 @@ pub struct ParseNativePageResult {
     // TODO: page_native_rotation
     pub page_id: PageID,
     pub text_lines: Vec<Line>,
+    pub paths: Vec<PDFPath>,
     pub page_bbox: BBox,
     pub page_image: Arc<DynamicImage>,
     pub page_image_scale1: DynamicImage,
@@ -170,6 +172,8 @@ pub(crate) fn parse_page_native(
 
     let text_lines = parse_text_lines(text_spans);
 
+    let paths = extract_page_paths(page, &page_bbox);
+
     let parse_native_duration_ms = start_time.elapsed().as_millis();
     tracing::debug!(
         "Parsing page {} using pdfium took {}ms",
@@ -179,6 +183,7 @@ pub(crate) fn parse_page_native(
     Ok(ParseNativePageResult {
         page_id,
         text_lines,
+        paths,
         page_bbox,
         page_image: Arc::new(page_image),
         page_image_scale1,
@@ -187,6 +192,49 @@ pub(crate) fn parse_page_native(
             parse_native_duration_ms,
         },
     })
+}
+
+fn extract_page_paths(page: &PdfPage, _page_bbox: &BBox) -> Vec<PDFPath> {
+    let mut paths = Vec::new();
+
+    for object in page.objects().iter() {
+        if let Some(path_obj) = object.as_path_object() {
+            let mut segments = Vec::new();
+            let mut current_point: Option<(f32, f32)> = None;
+
+            for segment in path_obj.segments().iter() {
+                let point = segment.point();
+                match segment.segment_type() {
+                    PdfPathSegmentType::MoveTo => {
+                        current_point = Some((point.0.value, point.1.value));
+                    }
+                    PdfPathSegmentType::LineTo => {
+                        if let Some(start) = current_point {
+                            let end = (point.0.value, point.1.value);
+                            segments.push(Segment::Line { start, end });
+                            current_point = Some(end);
+                        } else {
+                            current_point = Some((point.0.value, point.1.value));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if !segments.is_empty() {
+                paths.push(PDFPath {
+                    segments,
+                    is_stroke: path_obj.is_stroked().unwrap_or(false),
+                    is_fill: path_obj
+                        .fill_mode()
+                        .map(|m| m != PdfPathFillMode::None)
+                        .unwrap_or(false),
+                    stroke_width: path_obj.stroke_width().ok().map(|p| p.value),
+                });
+            }
+        }
+    }
+    paths
 }
 
 fn handle_parse_native_req(
