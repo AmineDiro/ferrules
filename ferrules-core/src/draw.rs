@@ -58,7 +58,7 @@ pub(crate) fn draw_text_lines(
 pub(crate) fn draw_layout_bboxes(
     bboxes: &[LayoutBBox],
     page_img: &DynamicImage,
-) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, FerrulesError> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
 
@@ -96,7 +96,7 @@ pub(crate) fn draw_layout_bboxes(
 pub(crate) fn draw_ocr_bboxes(
     bboxes: &[OCRLines],
     page_img: &DynamicImage,
-) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, FerrulesError> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
 
@@ -133,7 +133,7 @@ pub(crate) fn draw_ocr_bboxes(
 pub(crate) fn draw_paths(
     paths: &[crate::entities::PDFPath],
     page_img: &DynamicImage,
-) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, FerrulesError> {
     let mut out_img = page_img.to_rgba8();
 
     for path in paths {
@@ -167,7 +167,7 @@ pub(crate) fn draw_paths(
 pub(crate) fn draw_blocks(
     bboxes: &[Block],
     page_img: &DynamicImage,
-) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, FerrulesError> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
 

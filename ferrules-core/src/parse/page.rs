@@ -163,10 +163,7 @@ pub async fn parse_page_full(
                 paths: Arc::clone(&paths_arc),
                 table_bbox: element.bbox.clone(),
                 downscale_factor,
-                metadata: crate::parse::table::TableMetadata {
-                    response_tx: tx,
-                    queue_time: Instant::now(),
-                },
+                metadata: crate::parse::table::TableMetadata { response_tx: tx },
             };
             table_queue.push(req).await?;
             set.spawn(async move { (idx, rx.await) });

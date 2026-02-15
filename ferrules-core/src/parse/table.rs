@@ -8,7 +8,6 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{Instrument, Span};
 
@@ -16,12 +15,10 @@ use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::{BBox, PDFPath, PageID};
 use crate::error::FerrulesError;
 use crate::layout::model::LayoutBBox;
-use anyhow::Result as AnyhowResult;
 
 #[derive(Debug)]
 pub struct TableMetadata {
-    pub(crate) response_tx: oneshot::Sender<AnyhowResult<ParseTableResponse>>,
-    pub(crate) queue_time: Instant,
+    pub(crate) response_tx: oneshot::Sender<Result<ParseTableResponse, FerrulesError>>,
 }
 
 #[derive(Debug)]
@@ -37,9 +34,7 @@ pub(crate) struct ParseTableRequest {
 
 #[derive(Debug)]
 pub(crate) struct ParseTableResponse {
-    pub(crate) page_id: PageID,
     pub(crate) table_block: TableBlock,
-    pub(crate) table_parse_duration_ms: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +95,6 @@ async fn handle_table_request(
     let page_image = page_image.clone();
     let table_bbox = table_bbox.clone();
 
-    let start = Instant::now();
     let table_result = tokio::task::spawn_blocking(move || {
         parser.parse(
             page_id,
@@ -119,16 +113,9 @@ async fn handle_table_request(
         Err(_e) => return, // Task panicked or cancelled
     };
 
-    let duration = start.elapsed().as_millis();
     drop(_permit);
 
-    let response = table_result
-        .map(|t| ParseTableResponse {
-            page_id,
-            table_block: t,
-            table_parse_duration_ms: duration,
-        })
-        .map_err(|e| e.into());
+    let response = table_result.map(|t| ParseTableResponse { table_block: t });
 
     let _ = metadata.response_tx.send(response);
 }
@@ -151,7 +138,12 @@ impl TableTransformer {
     const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-    pub fn new(config: &crate::layout::model::ORTConfig) -> AnyhowResult<Self> {
+    fn scale_wh(&self, w0: f32, h0: f32, w1: f32, h1: f32) -> (f32, f32, f32) {
+        let r = (w1 / w0).min(h1 / h0);
+        (r, (w0 * r).round(), (h0 * r).round())
+    }
+
+    pub fn new(config: &crate::layout::model::ORTConfig) -> Result<Self, FerrulesError> {
         let mut execution_providers = Vec::new();
 
         // Providers
@@ -199,12 +191,18 @@ impl TableTransformer {
             None => GraphOptimizationLevel::Disable,
         };
 
-        let session = Session::builder()?
-            .with_execution_providers(execution_providers)?
-            .with_optimization_level(opt_lvl)?
-            .with_intra_threads(config.intra_threads)?
-            .with_inter_threads(config.inter_threads)?
-            .commit_from_memory(TABLE_MODEL_BYTES)?;
+        let session = Session::builder()
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .with_execution_providers(execution_providers)
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .with_optimization_level(opt_lvl)
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .with_intra_threads(config.intra_threads)
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .with_inter_threads(config.inter_threads)
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .commit_from_memory(TABLE_MODEL_BYTES)
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
 
         let output_names = session.outputs.iter().map(|o| o.name.clone()).collect();
 
@@ -215,15 +213,29 @@ impl TableTransformer {
     }
 
     pub fn preprocess(&self, img: &DynamicImage) -> Array4<f32> {
-        let resized = img.resize_exact(
-            Self::INPUT_SIZE[2] as u32,
-            Self::INPUT_SIZE[3] as u32,
-            FilterType::Triangle,
+        let (w0, h0) = img.dimensions();
+        let (_, w_new, h_new) = self.scale_wh(
+            w0 as f32,
+            h0 as f32,
+            Self::INPUT_SIZE[3] as f32,
+            Self::INPUT_SIZE[2] as f32,
         );
+
+        let resized = img.resize_exact(w_new as u32, h_new as u32, FilterType::Triangle);
         let mut input = Array4::zeros(Self::INPUT_SIZE);
+        // Fill with normalized neutral padding color (144.0/255.0)
+        let pad_v = [
+            (144.0 / 255.0 - Self::IMAGENET_MEAN[0]) / Self::IMAGENET_STD[0],
+            (144.0 / 255.0 - Self::IMAGENET_MEAN[1]) / Self::IMAGENET_STD[1],
+            (144.0 / 255.0 - Self::IMAGENET_MEAN[2]) / Self::IMAGENET_STD[2],
+        ];
+        for c in 0..3 {
+            input.slice_mut(ndarray::s![0, c, .., ..]).fill(pad_v[c]);
+        }
 
         for (x, y, pixel) in resized.pixels() {
             let [r, g, b, _] = pixel.0;
+            // Normalize with ImageNet mean/std
             input[[0, 0, y as usize, x as usize]] =
                 (r as f32 / 255.0 - Self::IMAGENET_MEAN[0]) / Self::IMAGENET_STD[0];
             input[[0, 1, y as usize, x as usize]] =
@@ -235,9 +247,18 @@ impl TableTransformer {
         input
     }
 
-    pub fn run(&self, input: Array4<f32>) -> AnyhowResult<ort::session::SessionOutputs<'_, '_>> {
+    pub fn run(
+        &self,
+        input: Array4<f32>,
+    ) -> Result<ort::session::SessionOutputs<'_, '_>, FerrulesError> {
         let input_f16 = input.mapv(half::f16::from_f32);
-        let outputs = self.session.run(ort::inputs![input_f16]?)?;
+        let outputs = self
+            .session
+            .run(
+                ort::inputs![input_f16]
+                    .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?,
+            )
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
         Ok(outputs)
     }
 
@@ -248,9 +269,13 @@ impl TableTransformer {
         outputs: &ort::session::SessionOutputs,
         orig_width: u32,
         orig_height: u32,
-    ) -> AnyhowResult<Vec<LayoutBBox>> {
-        let logits = outputs["logits"].try_extract_tensor::<half::f16>()?;
-        let boxes = outputs["pred_boxes"].try_extract_tensor::<half::f16>()?;
+    ) -> Result<Vec<LayoutBBox>, FerrulesError> {
+        let logits = outputs["logits"]
+            .try_extract_tensor::<half::f16>()
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
+        let boxes = outputs["pred_boxes"]
+            .try_extract_tensor::<half::f16>()
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
         let logits = logits.mapv(|x| x.to_f32());
         let boxes = boxes.mapv(|x| x.to_f32());
 
@@ -291,18 +316,21 @@ impl TableTransformer {
                 continue;
             }
 
-            let cx = box_coords[0] * orig_width as f32;
-            let cy = box_coords[1] * orig_height as f32;
-            let w = box_coords[2] * orig_width as f32;
-            let h = box_coords[3] * orig_height as f32;
+            let ratio = (Self::INPUT_SIZE[3] as f32 / orig_width as f32)
+                .min(Self::INPUT_SIZE[2] as f32 / orig_height as f32);
+
+            let cx = (box_coords[0] * Self::INPUT_SIZE[3] as f32) / ratio;
+            let cy = (box_coords[1] * Self::INPUT_SIZE[2] as f32) / ratio;
+            let w = (box_coords[2] * Self::INPUT_SIZE[3] as f32) / ratio;
+            let h = (box_coords[3] * Self::INPUT_SIZE[2] as f32) / ratio;
 
             results.push(LayoutBBox {
                 id: i as i32,
                 bbox: BBox {
-                    x0: cx - w / 2.0,
-                    y0: cy - h / 2.0,
-                    x1: cx + w / 2.0,
-                    y1: cy + h / 2.0,
+                    x0: (cx - w / 2.0).max(0.0).min(orig_width as f32),
+                    y0: (cy - h / 2.0).max(0.0).min(orig_height as f32),
+                    x1: (cx + w / 2.0).max(0.0).min(orig_width as f32),
+                    y1: (cy + h / 2.0).max(0.0).min(orig_height as f32),
                 },
                 label: labels[max_idx],
                 proba: 1.0 / (1.0 + (-max_val).exp()),
@@ -669,8 +697,11 @@ impl TableParser {
 
         // 1. Crop image to table_bbox (in image coordinates)
         let scale = 1.0 / downscale_factor;
-        let x0 = (table_bbox.x0 * scale) as u32;
-        let y0 = (table_bbox.y0 * scale) as u32;
+        let x0_f = table_bbox.x0 * scale;
+        let y0_f = table_bbox.y0 * scale;
+        let x0 = x0_f.floor() as u32;
+        let y0 = y0_f.floor() as u32;
+
         // Ensure we don't go out of bounds
         let x0 = x0.min(image.width());
         let y0 = y0.min(image.height());
@@ -749,9 +780,9 @@ impl TableParser {
             table_rows.push(crate::blocks::TableRow {
                 cells,
                 bbox: BBox {
-                    x0: (row_det.bbox.x0 + x0 as f32) * downscale_factor,
+                    x0: table_bbox.x0,
                     y0: (row_det.bbox.y0 + y0 as f32) * downscale_factor,
-                    x1: (row_det.bbox.x1 + x0 as f32) * downscale_factor,
+                    x1: table_bbox.x1,
                     y1: (row_det.bbox.y1 + y0 as f32) * downscale_factor,
                 },
                 is_header: false,

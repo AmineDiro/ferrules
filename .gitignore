@@ -9,3 +9,4 @@ test_data/*
 models/
 
 **/.env
+**/examples/
