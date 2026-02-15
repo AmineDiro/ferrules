@@ -14,7 +14,7 @@ use tracing::{Instrument, Span};
 use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::{BBox, PDFPath, PageID};
 use crate::error::FerrulesError;
-use crate::layout::model::LayoutBBox;
+use crate::layout::model::{nms, LayoutBBox};
 
 #[derive(Debug)]
 pub struct TableMetadata {
@@ -134,12 +134,29 @@ pub struct TableTransformer {
 }
 
 impl TableTransformer {
-    const INPUT_SIZE: [usize; 4] = [1, 3, 1000, 1000];
+    const SHORTEST_EDGE: usize = 800;
+    const MAX_SIZE: usize = 1333;
     const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-    fn scale_wh(&self, w0: f32, h0: f32, w1: f32, h1: f32) -> (f32, f32, f32) {
-        let r = (w1 / w0).min(h1 / h0);
+    // Structure Recognition Labels:
+    // 0: table, 1: column, 2: row, 3: column header, 4: projected row header, 5: spanning cell
+    const TABLE_LABELS: [&'static str; 6] = [
+        "table",
+        "column",
+        "row",
+        "column_header",
+        "projected_row_header",
+        "spanning_cell",
+    ];
+
+    const CONFIDENCE_THRESHOLD: f32 = 0.6;
+
+    fn scale_wh(&self, w0: f32, h0: f32) -> (f32, f32, f32) {
+        let mut r = Self::SHORTEST_EDGE as f32 / w0.min(h0);
+        if (w0.max(h0) * r) > Self::MAX_SIZE as f32 {
+            r = Self::MAX_SIZE as f32 / w0.max(h0);
+        }
         (r, (w0 * r).round(), (h0 * r).round())
     }
 
@@ -214,24 +231,12 @@ impl TableTransformer {
 
     pub fn preprocess(&self, img: &DynamicImage) -> Array4<f32> {
         let (w0, h0) = img.dimensions();
-        let (_, w_new, h_new) = self.scale_wh(
-            w0 as f32,
-            h0 as f32,
-            Self::INPUT_SIZE[3] as f32,
-            Self::INPUT_SIZE[2] as f32,
-        );
+        let (_, w_new, h_new) = self.scale_wh(w0 as f32, h0 as f32);
 
         let resized = img.resize_exact(w_new as u32, h_new as u32, FilterType::Triangle);
-        let mut input = Array4::zeros(Self::INPUT_SIZE);
-        // Fill with normalized neutral padding color (144.0/255.0)
-        let pad_v = [
-            (144.0 / 255.0 - Self::IMAGENET_MEAN[0]) / Self::IMAGENET_STD[0],
-            (144.0 / 255.0 - Self::IMAGENET_MEAN[1]) / Self::IMAGENET_STD[1],
-            (144.0 / 255.0 - Self::IMAGENET_MEAN[2]) / Self::IMAGENET_STD[2],
-        ];
-        for c in 0..3 {
-            input.slice_mut(ndarray::s![0, c, .., ..]).fill(pad_v[c]);
-        }
+        let (w_final, h_final) = resized.dimensions();
+
+        let mut input = Array4::zeros([1, 3, h_final as usize, w_final as usize]);
 
         for (x, y, pixel) in resized.pixels() {
             let [r, g, b, _] = pixel.0;
@@ -284,17 +289,6 @@ impl TableTransformer {
 
         let mut results = Vec::new();
 
-        // Structure Recognition Labels:
-        // 0: table, 1: column, 2: row, 3: column header, 4: projected row header, 5: spanning cell
-        let labels = [
-            "table",
-            "column",
-            "row",
-            "column_header",
-            "projected_row_header",
-            "spanning_cell",
-        ];
-
         let logits = logits.index_axis(Axis(0), 0);
         let boxes = boxes.index_axis(Axis(0), 0);
 
@@ -302,27 +296,30 @@ impl TableTransformer {
             let logit = logits.index_axis(Axis(0), i);
             let box_coords = boxes.index_axis(Axis(0), i);
 
+            // Apply softmax to get proper probabilities
+            let max_logit = logit.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let exp_sum: f32 = logit.iter().map(|&v| (v - max_logit).exp()).sum();
+            let softmax_probs: Vec<f32> = logit
+                .iter()
+                .map(|&v| (v - max_logit).exp() / exp_sum)
+                .collect();
+
             // Find best class
-            let (max_idx, &max_val) = logit
+            let (max_idx, &max_prob) = softmax_probs
                 .iter()
                 .enumerate()
-                .take(6) // Only first 6 are valid classes
+                .take(Self::TABLE_LABELS.len()) // only first 6 are valid classes
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap();
 
-            // Background class is 6
-            let bg_val = logit[6];
-            if max_val < bg_val || max_val < 0.5 {
+            if max_prob < Self::CONFIDENCE_THRESHOLD {
                 continue;
             }
 
-            let ratio = (Self::INPUT_SIZE[3] as f32 / orig_width as f32)
-                .min(Self::INPUT_SIZE[2] as f32 / orig_height as f32);
-
-            let cx = (box_coords[0] * Self::INPUT_SIZE[3] as f32) / ratio;
-            let cy = (box_coords[1] * Self::INPUT_SIZE[2] as f32) / ratio;
-            let w = (box_coords[2] * Self::INPUT_SIZE[3] as f32) / ratio;
-            let h = (box_coords[3] * Self::INPUT_SIZE[2] as f32) / ratio;
+            let cx = box_coords[0] * orig_width as f32;
+            let cy = box_coords[1] * orig_height as f32;
+            let w = box_coords[2] * orig_width as f32;
+            let h = box_coords[3] * orig_height as f32;
 
             results.push(LayoutBBox {
                 id: i as i32,
@@ -332,8 +329,8 @@ impl TableTransformer {
                     x1: (cx + w / 2.0).max(0.0).min(orig_width as f32),
                     y1: (cy + h / 2.0).max(0.0).min(orig_height as f32),
                 },
-                label: labels[max_idx],
-                proba: 1.0 / (1.0 + (-max_val).exp()),
+                label: Self::TABLE_LABELS[max_idx],
+                proba: max_prob,
             });
         }
 
@@ -732,14 +729,20 @@ impl TableParser {
 
         // 5. Map detections to Table structure
         // Simple mapping: find all 'row' and 'column' labels
-        let mut rows = detections
+        let mut rows: Vec<LayoutBBox> = detections
             .iter()
             .filter(|d| d.label == "row")
-            .collect::<Vec<_>>();
-        let mut cols = detections
+            .cloned()
+            .collect();
+        let mut cols: Vec<LayoutBBox> = detections
             .iter()
             .filter(|d| d.label == "column")
-            .collect::<Vec<_>>();
+            .cloned()
+            .collect();
+
+        // 5a. Apply NMS to rows and columns independently
+        nms(&mut rows, 0.5);
+        nms(&mut cols, 0.5);
 
         rows.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
         cols.sort_by(|a, b| a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap());
