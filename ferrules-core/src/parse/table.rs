@@ -747,6 +747,22 @@ impl TableParser {
         rows.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
         cols.sort_by(|a, b| a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap());
 
+        // Snap outermost column/row edges to the table bbox so cells cover
+        // the full table area. The model detects content areas which are
+        // typically slightly narrower than the full table boundaries.
+        if let Some(first_col) = cols.first_mut() {
+            first_col.bbox.x0 = 0.0;
+        }
+        if let Some(last_col) = cols.last_mut() {
+            last_col.bbox.x1 = w as f32;
+        }
+        if let Some(first_row) = rows.first_mut() {
+            first_row.bbox.y0 = 0.0;
+        }
+        if let Some(last_row) = rows.last_mut() {
+            last_row.bbox.y1 = h as f32;
+        }
+
         let mut table_rows = Vec::new();
         for row_det in rows {
             let mut cells = Vec::new();
