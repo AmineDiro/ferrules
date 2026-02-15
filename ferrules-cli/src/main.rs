@@ -443,6 +443,20 @@ async fn main() {
                         ],
                     );
                 }
+                ferrules_core::error::FerrulesError::TableTransformerModelError(e) => {
+                    format_error(
+                        "Table Transformation Failed",
+                        "Failed to process table using the vision model.",
+                        vec![
+                            ("Error", e),
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "Check if the model files are present and valid.".to_string(),
+                            ),
+                        ],
+                    );
+                }
             }
             std::process::exit(1);
         }

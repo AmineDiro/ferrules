@@ -16,11 +16,11 @@ use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::{BBox, PDFPath, PageID};
 use crate::error::FerrulesError;
 use crate::layout::model::LayoutBBox;
-use anyhow::Result;
+use anyhow::Result as AnyhowResult;
 
 #[derive(Debug)]
 pub struct TableMetadata {
-    pub(crate) response_tx: oneshot::Sender<Result<ParseTableResponse>>,
+    pub(crate) response_tx: oneshot::Sender<AnyhowResult<ParseTableResponse>>,
     pub(crate) queue_time: Instant,
 }
 
@@ -122,11 +122,13 @@ async fn handle_table_request(
     let duration = start.elapsed().as_millis();
     drop(_permit);
 
-    let response = table_result.map(|t| ParseTableResponse {
-        page_id,
-        table_block: t,
-        table_parse_duration_ms: duration,
-    });
+    let response = table_result
+        .map(|t| ParseTableResponse {
+            page_id,
+            table_block: t,
+            table_parse_duration_ms: duration,
+        })
+        .map_err(|e| e.into());
 
     let _ = metadata.response_tx.send(response);
 }
@@ -149,7 +151,7 @@ impl TableTransformer {
     const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-    pub fn new(config: &crate::layout::model::ORTConfig) -> Result<Self> {
+    pub fn new(config: &crate::layout::model::ORTConfig) -> AnyhowResult<Self> {
         let mut execution_providers = Vec::new();
 
         // Providers
@@ -233,8 +235,9 @@ impl TableTransformer {
         input
     }
 
-    pub fn run(&self, input: Array4<f32>) -> Result<ort::session::SessionOutputs<'_, '_>> {
-        let outputs = self.session.run(ort::inputs![input]?)?;
+    pub fn run(&self, input: Array4<f32>) -> AnyhowResult<ort::session::SessionOutputs<'_, '_>> {
+        let input_f16 = input.mapv(half::f16::from_f32);
+        let outputs = self.session.run(ort::inputs![input_f16]?)?;
         Ok(outputs)
     }
 
@@ -245,9 +248,11 @@ impl TableTransformer {
         outputs: &ort::session::SessionOutputs,
         orig_width: u32,
         orig_height: u32,
-    ) -> Result<Vec<LayoutBBox>> {
-        let logits = outputs["logits"].try_extract_tensor::<f32>()?;
-        let boxes = outputs["pred_boxes"].try_extract_tensor::<f32>()?;
+    ) -> AnyhowResult<Vec<LayoutBBox>> {
+        let logits = outputs["logits"].try_extract_tensor::<half::f16>()?;
+        let boxes = outputs["pred_boxes"].try_extract_tensor::<half::f16>()?;
+        let logits = logits.mapv(|x| x.to_f32());
+        let boxes = boxes.mapv(|x| x.to_f32());
 
         // logits: [1, 125, 7] (Structure Recognition has 6 classes + 1 Background)
         // boxes: [1, 125, 4]
@@ -327,7 +332,7 @@ impl TableParser {
         table_bbox: &BBox,
         page_image: &DynamicImage,
         downscale_factor: f32,
-    ) -> Result<TableBlock> {
+    ) -> Result<TableBlock, FerrulesError> {
         // Decide between Lattice and Stream
         // For now, let's try Lattice if we have paths
         if !paths.is_empty() {
@@ -352,28 +357,20 @@ impl TableParser {
 
         let cell_count: usize = table.rows.iter().map(|r| r.cells.len()).sum();
         let row_count = table.rows.len();
-        let avg_cells_per_row = if row_count > 0 {
-            cell_count as f32 / row_count as f32
-        } else {
-            0.0
-        };
 
         // Heuristics to trigger Vision fallback:
         // 1. Stream found very few cells in a large area.
         // 2. Stream found no rows.
-        // 3. For borderless tables, if the area is large, evaluate Vision as it might be more structured.
-        let is_suspicious =
-            (cell_count <= 2 && table_bbox.width() > 50.0 && table_bbox.height() > 30.0)
-                || (row_count <= 1 && table_bbox.height() > 80.0)
-                || (avg_cells_per_row < 1.5 && table_bbox.width() > 150.0);
+        // 3. Large area (>5000 units) often benefits from model structure.
+        let area = table_bbox.area();
+        let is_suspicious = (cell_count <= 2 && area > 1500.0) || (row_count <= 1 && area > 3000.0);
 
-        if table.rows.is_empty() || is_suspicious || table_bbox.area() > 5000.0 {
+        if row_count == 0 || is_suspicious || area > 5000.0 {
             tracing::debug!(
-                "Page {} - Stream found {} cells ({} rows). Trying Vision comparison (Area {:?})...",
+                "Page {} - Stream suspicious ({} cells, {} rows). Trying Vision comparison...",
                 _page_id,
                 cell_count,
-                row_count,
-                table_bbox.area()
+                row_count
             );
 
             if let Ok(vision_table) =
@@ -382,7 +379,7 @@ impl TableParser {
                 let vision_cell_count: usize =
                     vision_table.rows.iter().map(|r| r.cells.len()).sum();
 
-                // Pick vision if it found more cells OR if stream was highly suspicious
+                // Pick vision if it found significantly more cells OR if stream was empty
                 if vision_cell_count > cell_count
                     || (cell_count == 0 && !vision_table.rows.is_empty())
                 {
@@ -395,11 +392,6 @@ impl TableParser {
                     return Ok(vision_table);
                 }
             }
-        }
-
-        if table.rows.is_empty() {
-            // Keep as Stream (Unknown) if both failed
-            return Ok(table);
         }
 
         tracing::debug!(
@@ -669,7 +661,7 @@ impl TableParser {
         lines: &[crate::entities::Line],
         table_bbox: &BBox,
         downscale_factor: f32,
-    ) -> Result<TableBlock> {
+    ) -> Result<TableBlock, FerrulesError> {
         let transformer = match &self.transformer {
             Some(t) => t,
             None => return Ok(TableBlock::default()),
@@ -696,10 +688,16 @@ impl TableParser {
         let input = transformer.preprocess(&crop);
 
         // 3. Run Inference
-        let outputs = transformer.run(input)?;
+        let outputs = transformer.run(input).map_err(|e| {
+            tracing::error!("parse_vision: Inference failed: {:?}", e);
+            FerrulesError::TableTransformerModelError(e.to_string())
+        })?;
 
         // 4. Postprocess
-        let detections = transformer.postprocess(&outputs, w, h)?;
+        let detections = transformer.postprocess(&outputs, w, h).map_err(|e| {
+            tracing::error!("parse_vision: Postprocess failed: {:?}", e);
+            FerrulesError::TableTransformerModelError(e.to_string())
+        })?;
 
         // 5. Map detections to Table structure
         // Simple mapping: find all 'row' and 'column' labels
@@ -716,7 +714,7 @@ impl TableParser {
         cols.sort_by(|a, b| a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap());
 
         let mut table_rows = Vec::new();
-        for row_det in &rows {
+        for row_det in rows {
             let mut cells = Vec::new();
             for col_det in &cols {
                 let col_x0_pdf = (col_det.bbox.x0 + x0 as f32) * downscale_factor;
@@ -732,9 +730,10 @@ impl TableParser {
                 };
 
                 // Filter lines that fall into this cell
+                // Use intersection to be more robust to slight model inaccuracies
                 let cell_text = lines
                     .iter()
-                    .filter(|l| cell_bbox.contains(&l.bbox))
+                    .filter(|l| cell_bbox.intersection(&l.bbox) / l.bbox.area() > 0.5)
                     .map(|l| l.text.as_str())
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -773,7 +772,7 @@ impl TableParser {
         &self,
         lines: &[crate::entities::Line],
         table_bbox: &BBox,
-    ) -> Result<TableBlock> {
+    ) -> Result<TableBlock, FerrulesError> {
         // 1. Filter lines within table_bbox
         let mut table_lines: Vec<_> = lines
             .iter()
