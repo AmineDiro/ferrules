@@ -6,6 +6,7 @@ use ort::execution_providers::{
 };
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, Semaphore};
@@ -115,7 +116,7 @@ async fn handle_table_request(
     // Handle JoinError from spawn_blocking
     let table_result = match table_result {
         Ok(res) => res,
-        Err(e) => return, // Task panicked or cancelled
+        Err(_e) => return, // Task panicked or cancelled
     };
 
     let duration = start.elapsed().as_millis();
@@ -135,6 +136,7 @@ pub const TABLE_MODEL_BYTES: &[u8] =
 
 pub struct TableParser {
     transformer: Option<TableTransformer>,
+    table_id_counter: AtomicUsize,
 }
 
 pub struct TableTransformer {
@@ -310,7 +312,10 @@ impl TableParser {
     const ROW_OVERLAP_THRESHOLD: f32 = 0.5;
 
     pub fn new(transformer: Option<TableTransformer>) -> Self {
-        Self { transformer }
+        Self {
+            transformer,
+            table_id_counter: AtomicUsize::new(0),
+        }
     }
 
     /// Main entry point to parse a table within a given bounding box on a page.
@@ -326,7 +331,7 @@ impl TableParser {
         // Decide between Lattice and Stream
         // For now, let's try Lattice if we have paths
         if !paths.is_empty() {
-            println!(
+            tracing::debug!(
                 "Page {} - BBox {:?} - {} paths. Trying Lattice...",
                 _page_id,
                 table_bbox,
@@ -334,30 +339,74 @@ impl TableParser {
             );
             if let Some(mut table) = self.parse_lattice(lines, paths, table_bbox) {
                 table.algorithm = TableAlgorithm::Lattice;
-                println!("Page {} - Lattice successful.", _page_id);
+                tracing::debug!("Page {} - Lattice successful.", _page_id);
                 return Ok(table);
             }
-            println!("Page {} - Lattice failed.", _page_id);
+            tracing::debug!("Page {} - Lattice failed.", _page_id);
         } else {
-            println!("Page {} has no paths. Skipping Lattice.", _page_id);
+            tracing::debug!("Page {} has no paths. Skipping Lattice.", _page_id);
         }
 
         let mut table = self.parse_stream(lines, table_bbox)?;
+        table.algorithm = TableAlgorithm::Stream;
+
+        let cell_count: usize = table.rows.iter().map(|r| r.cells.len()).sum();
+        let row_count = table.rows.len();
+        let avg_cells_per_row = if row_count > 0 {
+            cell_count as f32 / row_count as f32
+        } else {
+            0.0
+        };
+
+        // Heuristics to trigger Vision fallback:
+        // 1. Stream found very few cells in a large area.
+        // 2. Stream found no rows.
+        // 3. For borderless tables, if the area is large, evaluate Vision as it might be more structured.
+        let is_suspicious =
+            (cell_count <= 2 && table_bbox.width() > 50.0 && table_bbox.height() > 30.0)
+                || (row_count <= 1 && table_bbox.height() > 80.0)
+                || (avg_cells_per_row < 1.5 && table_bbox.width() > 150.0);
+
+        if table.rows.is_empty() || is_suspicious || table_bbox.area() > 5000.0 {
+            tracing::debug!(
+                "Page {} - Stream found {} cells ({} rows). Trying Vision comparison (Area {:?})...",
+                _page_id,
+                cell_count,
+                row_count,
+                table_bbox.area()
+            );
+
+            if let Ok(vision_table) =
+                self.parse_vision(page_image, lines, table_bbox, downscale_factor)
+            {
+                let vision_cell_count: usize =
+                    vision_table.rows.iter().map(|r| r.cells.len()).sum();
+
+                // Pick vision if it found more cells OR if stream was highly suspicious
+                if vision_cell_count > cell_count
+                    || (cell_count == 0 && !vision_table.rows.is_empty())
+                {
+                    tracing::debug!(
+                        "Page {} - Vision ({} cells) preferred over Stream ({} cells).",
+                        _page_id,
+                        vision_cell_count,
+                        cell_count
+                    );
+                    return Ok(vision_table);
+                }
+            }
+        }
 
         if table.rows.is_empty() {
-            println!(
-                "Page {} - Stream failed (no rows). Trying Vision...",
-                _page_id
-            );
-            // Fallback to vision if stream yields no results
-            let mut table = self.parse_vision(page_image, lines, table_bbox, downscale_factor)?;
-            table.algorithm = TableAlgorithm::Vision;
-            println!("Page {} - Vision finished.", _page_id);
+            // Keep as Stream (Unknown) if both failed
             return Ok(table);
         }
 
-        table.algorithm = TableAlgorithm::Stream;
-        println!("Page {} - Stream successful.", _page_id);
+        tracing::debug!(
+            "Page {} - Stream successful ({} cells).",
+            _page_id,
+            cell_count
+        );
         Ok(table)
     }
 
@@ -367,6 +416,7 @@ impl TableParser {
         paths: &[crate::entities::PDFPath],
         table_bbox: &BBox,
     ) -> Option<TableBlock> {
+        let padding = 5.0;
         let mut h_lines = Vec::new();
         let mut v_lines = Vec::new();
 
@@ -380,11 +430,12 @@ impl TableParser {
                         // Horizontal line
                         if (y1 - y2).abs() < 1.0 {
                             let y = (y1 + y2) / 2.0;
-                            // Check Y containment AND X overlap
-                            if y >= table_bbox.y0 && y <= table_bbox.y1 {
+                            if y >= table_bbox.y0 - padding && y <= table_bbox.y1 + padding {
                                 let x_min = x1.min(x2);
                                 let x_max = x1.max(x2);
-                                if x_min < table_bbox.x1 && x_max > table_bbox.x0 {
+                                if x_min < table_bbox.x1 + padding
+                                    && x_max > table_bbox.x0 - padding
+                                {
                                     h_lines.push((y, x_min, x_max));
                                 }
                             }
@@ -392,20 +443,19 @@ impl TableParser {
                         // Vertical line
                         else if (x1 - x2).abs() < 1.0 {
                             let x = (x1 + x2) / 2.0;
-                            // Check X containment AND Y overlap
-                            if x >= table_bbox.x0 && x <= table_bbox.x1 {
+                            if x >= table_bbox.x0 - padding && x <= table_bbox.x1 + padding {
                                 let y_min = y1.min(y2);
                                 let y_max = y1.max(y2);
-                                if y_min < table_bbox.y1 && y_max > table_bbox.y0 {
+                                if y_min < table_bbox.y1 + padding
+                                    && y_max > table_bbox.y0 - padding
+                                {
                                     v_lines.push((x, y_min, y_max));
                                 }
                             }
                         }
                     }
                     crate::entities::Segment::Rect { bbox } => {
-                        // Relaxed check: intersection instead of strict containment
-                        // To account for slight misalignments
-                        if table_bbox.relaxed_iou(bbox) > 0.0 {
+                        if table_bbox.intersection(bbox) > 0.0 {
                             h_lines.push((bbox.y0, bbox.x0, bbox.x1));
                             h_lines.push((bbox.y1, bbox.x0, bbox.x1));
                             v_lines.push((bbox.x0, bbox.y0, bbox.y1));
@@ -415,6 +465,13 @@ impl TableParser {
                 }
             }
         }
+
+        tracing::debug!(
+            "Lattice - BBox {:?} - segments: H={}, V={}",
+            table_bbox,
+            h_lines.len(),
+            v_lines.len()
+        );
 
         if h_lines.is_empty() || v_lines.is_empty() {
             return None;
@@ -458,43 +515,134 @@ impl TableParser {
         let v_coords: Vec<f32> = unique_v.iter().map(|l| l.0).collect();
 
         if h_coords.len() < 2 || v_coords.len() < 2 {
+            tracing::debug!(
+                "Lattice failed: insufficient grid lines. H={:?}, V={:?}",
+                h_coords,
+                v_coords
+            );
             return None;
         }
+        tracing::debug!("Lattice Grid: H={:?}, V={:?}", h_coords, v_coords);
+
+        // Pre-filter lines that intersect the table
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| table_bbox.intersection(&l.bbox) > 0.0)
+            .collect();
 
         let mut rows = Vec::new();
-        for i in 0..h_coords.len() - 1 {
+
+        // Matrix to track visited grid cells (for spanning)
+        let num_rows = h_coords.len() - 1;
+        let num_cols = v_coords.len() - 1;
+        let mut visited = vec![vec![false; num_cols]; num_rows];
+
+        for i in 0..num_rows {
             let y0 = h_coords[i];
             let y1 = h_coords[i + 1];
-            let mut cells = Vec::new();
+            let mut row_cells = Vec::new();
 
-            for j in 0..v_coords.len() - 1 {
+            for j in 0..num_cols {
+                if visited[i][j] {
+                    continue;
+                }
+
+                // Determine horizontal span
+                let mut col_span = 1;
+                while j + col_span < num_cols {
+                    let next_x = v_coords[j + col_span];
+                    // Is there a vertical line at next_x covering this row?
+                    let has_boundary = v_lines.iter().any(|(sx, ymin, ymax)| {
+                        if (sx - next_x).abs() > 1.5 {
+                            return false;
+                        }
+                        let overlap_start = y0.max(*ymin);
+                        let overlap_end = y1.min(*ymax);
+                        let overlap = (overlap_end - overlap_start).max(0.0);
+                        overlap > (y1 - y0) * 0.1
+                    });
+
+                    if has_boundary {
+                        break;
+                    }
+                    col_span += 1;
+                }
+
+                let row_span = 1;
                 let x0 = v_coords[j];
-                let x1 = v_coords[j + 1];
+                let x1 = v_coords[j + col_span];
                 let cell_bbox = BBox { x0, y0, x1, y1 };
 
-                let cell_text: String = lines
-                    .iter()
-                    .filter(|l| cell_bbox.iou(&l.bbox) > 0.5)
-                    .map(|l| l.text.clone())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                // Mark visited
+                for r in i..i + row_span {
+                    for c in j..j + col_span {
+                        visited[r][c] = true;
+                    }
+                }
 
-                cells.push(crate::blocks::TableCell {
+                // Collect spans that belong to this cell
+                let mut cell_spans = Vec::new();
+                for line in &table_lines {
+                    for span in &line.spans {
+                        let (cx, cy) = span.bbox.center();
+                        if cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1 {
+                            cell_spans.push(span);
+                        }
+                    }
+                }
+
+                // Sort spans by Y then X to maintain reading order
+                cell_spans.sort_by(|a, b| {
+                    a.bbox
+                        .y0
+                        .partial_cmp(&b.bbox.y0)
+                        .unwrap()
+                        .then(a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap())
+                });
+
+                let mut cell_text = String::new();
+                let mut last_bbox: Option<BBox> = None;
+
+                for span in cell_spans {
+                    // Clean text: replace newlines with space
+                    let cleaned = span.text.replace('\n', " ");
+                    let cleaned_trimmed = cleaned.trim();
+                    if cleaned_trimmed.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(last) = last_bbox {
+                        let is_new_line = (span.bbox.y0 - last.y0).abs() > last.height() * 0.3;
+                        let gap_x = span.bbox.x0 - last.x1;
+
+                        // Add space if there is a significant vertical or horizontal gap
+                        if is_new_line || gap_x > 2.0 {
+                            if !cell_text.ends_with(' ') {
+                                cell_text.push(' ');
+                            }
+                        }
+                    }
+
+                    cell_text.push_str(cleaned_trimmed);
+                    last_bbox = Some(span.bbox.clone());
+                }
+
+                row_cells.push(crate::blocks::TableCell {
                     content: vec![],
-                    text: cell_text.trim().to_string(),
-                    row_span: 1,
-                    col_span: 1,
+                    text: cell_text,
+                    row_span: row_span as u8,
+                    col_span: col_span as u8,
                     bbox: cell_bbox,
                 });
             }
 
-            if !cells.is_empty() {
-                let mut row_bbox = cells[0].bbox.clone();
-                for cell in &cells[1..] {
+            if !row_cells.is_empty() {
+                let mut row_bbox = row_cells[0].bbox.clone();
+                for cell in &row_cells[1..] {
                     row_bbox.merge(&cell.bbox);
                 }
                 rows.push(crate::blocks::TableRow {
-                    cells,
+                    cells: row_cells,
                     is_header: false,
                     bbox: row_bbox,
                 });
@@ -505,8 +653,9 @@ impl TableParser {
             return None;
         }
 
+        let table_id = self.table_id_counter.fetch_add(1, Ordering::SeqCst);
         Some(TableBlock {
-            id: 0,
+            id: table_id,
             caption: None,
             rows,
             has_borders: true,
@@ -567,7 +716,7 @@ impl TableParser {
         cols.sort_by(|a, b| a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap());
 
         let mut table_rows = Vec::new();
-        for row_det in rows {
+        for row_det in &rows {
             let mut cells = Vec::new();
             for col_det in &cols {
                 let col_x0_pdf = (col_det.bbox.x0 + x0 as f32) * downscale_factor;
@@ -610,8 +759,9 @@ impl TableParser {
             });
         }
 
+        let table_id = self.table_id_counter.fetch_add(1, Ordering::SeqCst);
         Ok(TableBlock {
-            id: 0,
+            id: table_id,
             caption: None,
             rows: table_rows,
             has_borders: true,
@@ -636,8 +786,9 @@ impl TableParser {
         // 3. Group lines into rows based on Y overlap
         let mut rows = Vec::new();
         if table_lines.is_empty() {
+            let table_id = self.table_id_counter.fetch_add(1, Ordering::SeqCst);
             return Ok(TableBlock {
-                id: 0,
+                id: table_id,
                 caption: None,
                 rows: vec![],
                 has_borders: false,
@@ -660,8 +811,9 @@ impl TableParser {
         }
         rows.push(self.process_row_lines(&current_row_lines));
 
+        let table_id = self.table_id_counter.fetch_add(1, Ordering::SeqCst);
         Ok(TableBlock {
-            id: 0,
+            id: table_id,
             caption: None,
             rows,
             has_borders: false,

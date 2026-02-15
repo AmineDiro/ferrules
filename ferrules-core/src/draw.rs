@@ -19,6 +19,7 @@ const LINE_PDFIRUM_COLOR: [u8; 4] = [255, 0, 0, 255];
 const PATH_COLOR: [u8; 4] = [0, 255, 0, 255]; // Green for paths
 const TABLE_ROW_COLOR: [u8; 4] = [0, 0, 255, 255]; // Blue
 const TABLE_CELL_COLOR: [u8; 4] = [255, 0, 0, 255]; // Red
+const VISION_COLOR: [u8; 4] = [138, 43, 226, 96]; // Violet/Purple with medium alpha
 
 fn load_font() -> FontArc {
     FontArc::try_from_slice(FONT_BYTES).unwrap()
@@ -206,11 +207,59 @@ pub(crate) fn draw_blocks(
     Ok(out_img)
 }
 
+fn draw_filled_rect_alpha(img: &mut image::RgbaImage, rect: Rect, color: Rgba<u8>) {
+    let alpha = color[3] as f32 / 255.0;
+    let (w, h) = img.dimensions();
+
+    let left = rect.left().max(0);
+    let top = rect.top().max(0);
+    let right = rect.right().min(w as i32);
+    let bottom = rect.bottom().min(h as i32);
+
+    for y in top..bottom {
+        for x in left..right {
+            let px = img.get_pixel_mut(x as u32, y as u32);
+            px[0] = ((1.0 - alpha) * px[0] as f32 + alpha * color[0] as f32) as u8;
+            px[1] = ((1.0 - alpha) * px[1] as f32 + alpha * color[1] as f32) as u8;
+            px[2] = ((1.0 - alpha) * px[2] as f32 + alpha * color[2] as f32) as u8;
+        }
+    }
+}
+
 fn draw_table_structure(
     table_block: &crate::blocks::TableBlock,
     out_img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
 ) {
-    // Draw Table BBox
+    // 1. Draw Vision hints (bottom layer)
+    if let crate::blocks::TableAlgorithm::Vision = &table_block.algorithm {
+        for row in &table_block.rows {
+            // Row detection
+            let row_rect = Rect::at(row.bbox.x0 as i32, row.bbox.y0 as i32).of_size(
+                row.bbox.width().max(1.0) as u32,
+                row.bbox.height().max(1.0) as u32,
+            );
+            draw_filled_rect_alpha(out_img, row_rect, Rgba(VISION_COLOR));
+        }
+
+        // Column detections based on first row cells
+        if let Some(first_row) = table_block.rows.first() {
+            let y_start = first_row.bbox.y0;
+            let y_end = table_block
+                .rows
+                .last()
+                .map(|r| r.bbox.y1)
+                .unwrap_or(y_start);
+            for cell in &first_row.cells {
+                let col_rect = Rect::at(cell.bbox.x0 as i32, y_start as i32).of_size(
+                    cell.bbox.width().max(1.0) as u32,
+                    (y_end - y_start).max(1.0) as u32,
+                );
+                draw_filled_rect_alpha(out_img, col_rect, Rgba(VISION_COLOR));
+            }
+        }
+    }
+
+    // 2. Draw Table BBox
     // We can assume the table block itself is drawn by the caller if needed,
     // but here we focus on internal structure.
 

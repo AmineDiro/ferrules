@@ -229,6 +229,9 @@ fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
+    if args.debug || std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::fmt::init();
+    }
 
     // Check providers
     let providers = parse_ep_args(&args);

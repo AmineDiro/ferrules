@@ -172,7 +172,7 @@ pub struct Element {
     pub layout_block_id: i32,
     pub text_block: ElementText,
     pub kind: ElementType,
-    pub page_id: usize,
+    pub page_id: PageID,
     pub bbox: BBox,
 }
 

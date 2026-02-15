@@ -151,7 +151,7 @@ pub async fn parse_page_full(
     let text_lines_arc = Arc::new(text_lines.clone());
     let paths_arc = Arc::new(paths);
 
-    // Specialized table parsing
+    // Table parsing
     let mut set = JoinSet::new();
     for (idx, element) in elements.iter().enumerate() {
         if matches!(element.kind, ElementType::Table(_)) {
