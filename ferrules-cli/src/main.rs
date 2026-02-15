@@ -239,8 +239,6 @@ async fn main() {
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
-    // Global tasks
-    let parser = FerrulesParser::new(ort_config);
 
     let page_range = match args.page_range {
         Some(ref page_range_str) => match parse_page_range(page_range_str) {
@@ -263,9 +261,11 @@ async fn main() {
         },
         None => None,
     };
-
     let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
     let pbc = pb.clone();
+
+    // Global tasks
+    let parser = FerrulesParser::new(ort_config);
 
     let doc_name = args
         .file_path

@@ -16,6 +16,7 @@ const BLOCK_COLOR: [u8; 4] = [209, 139, 0, 255];
 const LAYOUT_COLOR: [u8; 4] = [0, 0, 255, 255];
 const LINE_OCR_COLOR: [u8; 4] = [17, 138, 1, 255];
 const LINE_PDFIRUM_COLOR: [u8; 4] = [255, 0, 0, 255];
+const PATH_COLOR: [u8; 4] = [0, 255, 0, 255]; // Green for paths
 const TABLE_ROW_COLOR: [u8; 4] = [0, 0, 255, 255]; // Blue
 const TABLE_CELL_COLOR: [u8; 4] = [255, 0, 0, 255]; // Red
 
@@ -123,6 +124,40 @@ pub(crate) fn draw_ocr_bboxes(
             &font,
             &legend,
         );
+    }
+
+    Ok(out_img)
+}
+
+pub(crate) fn draw_paths(
+    paths: &[crate::entities::PDFPath],
+    page_img: &DynamicImage,
+) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+    let mut out_img = page_img.to_rgba8();
+
+    for path in paths {
+        for segment in &path.segments {
+            match segment {
+                crate::entities::Segment::Line { start, end } => {
+                    let start = (start.0 as f32, start.1 as f32);
+                    let end = (end.0 as f32, end.1 as f32);
+                    imageproc::drawing::draw_line_segment_mut(
+                        &mut out_img,
+                        start,
+                        end,
+                        Rgba(PATH_COLOR),
+                    );
+                }
+                crate::entities::Segment::Rect { bbox } => {
+                    let x0 = bbox.x0 as i32;
+                    let y0 = bbox.y0 as i32;
+                    let width = (bbox.width() as u32).max(1);
+                    let height = (bbox.height() as u32).max(1);
+                    let rect = Rect::at(x0, y0).of_size(width, height);
+                    draw_hollow_rect_mut(&mut out_img, rect, Rgba(PATH_COLOR));
+                }
+            }
+        }
     }
 
     Ok(out_img)
@@ -293,6 +328,7 @@ mod tests {
                     ],
                 },
             ],
+            algorithm: crate::blocks::TableAlgorithm::Unknown,
         };
 
         // Directly call the internal function to test it

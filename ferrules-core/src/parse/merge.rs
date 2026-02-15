@@ -439,6 +439,7 @@ pub(crate) fn merge_elements_into_blocks(
                         caption: None,
                         rows: Vec::new(),
                         has_borders: false,
+                        algorithm: crate::blocks::TableAlgorithm::Unknown,
                     })),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,

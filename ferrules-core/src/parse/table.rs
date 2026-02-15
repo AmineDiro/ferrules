@@ -11,9 +11,10 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{Instrument, Span};
 
-use crate::blocks::TableBlock;
+use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::{BBox, PDFPath, PageID};
 use crate::error::FerrulesError;
+use crate::layout::model::LayoutBBox;
 use anyhow::Result;
 
 #[derive(Debug)]
@@ -29,6 +30,7 @@ pub(crate) struct ParseTableRequest {
     pub(crate) lines: Arc<Vec<crate::entities::Line>>,
     pub(crate) paths: Arc<Vec<crate::entities::PDFPath>>,
     pub(crate) table_bbox: BBox,
+    pub(crate) downscale_factor: f32,
     pub(crate) metadata: TableMetadata,
 }
 
@@ -87,11 +89,34 @@ async fn handle_table_request(
         lines,
         paths,
         table_bbox,
+        downscale_factor,
         metadata,
     } = req;
 
+    let parser = _parser.clone();
+    let lines = lines.clone();
+    let paths = paths.clone();
+    let page_image = page_image.clone();
+    let table_bbox = table_bbox.clone();
+
     let start = Instant::now();
-    let table_result = _parser.parse(page_id, &lines, &paths, &table_bbox, &page_image);
+    let table_result = tokio::task::spawn_blocking(move || {
+        parser.parse(
+            page_id,
+            &lines,
+            &paths,
+            &table_bbox,
+            &page_image,
+            downscale_factor,
+        )
+    })
+    .await;
+
+    // Handle JoinError from spawn_blocking
+    let table_result = match table_result {
+        Ok(res) => res,
+        Err(e) => return, // Task panicked or cancelled
+    };
 
     let duration = start.elapsed().as_millis();
     drop(_permit);
@@ -114,7 +139,7 @@ pub struct TableParser {
 
 pub struct TableTransformer {
     session: Session,
-    output_names: Vec<String>,
+    _output_names: Vec<String>,
 }
 
 impl TableTransformer {
@@ -181,7 +206,7 @@ impl TableTransformer {
 
         Ok(Self {
             session,
-            output_names,
+            _output_names: output_names,
         })
     }
 
@@ -281,8 +306,6 @@ impl TableTransformer {
     }
 }
 
-use crate::layout::model::LayoutBBox;
-
 impl TableParser {
     const ROW_OVERLAP_THRESHOLD: f32 = 0.5;
 
@@ -298,22 +321,43 @@ impl TableParser {
         paths: &[PDFPath],
         table_bbox: &BBox,
         page_image: &DynamicImage,
+        downscale_factor: f32,
     ) -> Result<TableBlock> {
         // Decide between Lattice and Stream
         // For now, let's try Lattice if we have paths
         if !paths.is_empty() {
-            if let Some(table) = self.parse_lattice(lines, paths, table_bbox) {
+            println!(
+                "Page {} - BBox {:?} - {} paths. Trying Lattice...",
+                _page_id,
+                table_bbox,
+                paths.len()
+            );
+            if let Some(mut table) = self.parse_lattice(lines, paths, table_bbox) {
+                table.algorithm = TableAlgorithm::Lattice;
+                println!("Page {} - Lattice successful.", _page_id);
                 return Ok(table);
             }
+            println!("Page {} - Lattice failed.", _page_id);
+        } else {
+            println!("Page {} has no paths. Skipping Lattice.", _page_id);
         }
 
-        let table = self.parse_stream(lines, table_bbox)?;
+        let mut table = self.parse_stream(lines, table_bbox)?;
 
         if table.rows.is_empty() {
+            println!(
+                "Page {} - Stream failed (no rows). Trying Vision...",
+                _page_id
+            );
             // Fallback to vision if stream yields no results
-            return self.parse_vision(page_image, lines, table_bbox);
+            let mut table = self.parse_vision(page_image, lines, table_bbox, downscale_factor)?;
+            table.algorithm = TableAlgorithm::Vision;
+            println!("Page {} - Vision finished.", _page_id);
+            return Ok(table);
         }
 
+        table.algorithm = TableAlgorithm::Stream;
+        println!("Page {} - Stream successful.", _page_id);
         Ok(table)
     }
 
@@ -336,21 +380,32 @@ impl TableParser {
                         // Horizontal line
                         if (y1 - y2).abs() < 1.0 {
                             let y = (y1 + y2) / 2.0;
+                            // Check Y containment AND X overlap
                             if y >= table_bbox.y0 && y <= table_bbox.y1 {
-                                h_lines.push((y, x1.min(x2), x1.max(x2)));
+                                let x_min = x1.min(x2);
+                                let x_max = x1.max(x2);
+                                if x_min < table_bbox.x1 && x_max > table_bbox.x0 {
+                                    h_lines.push((y, x_min, x_max));
+                                }
                             }
                         }
                         // Vertical line
                         else if (x1 - x2).abs() < 1.0 {
                             let x = (x1 + x2) / 2.0;
+                            // Check X containment AND Y overlap
                             if x >= table_bbox.x0 && x <= table_bbox.x1 {
-                                v_lines.push((x, y1.min(y2), y1.max(y2)));
+                                let y_min = y1.min(y2);
+                                let y_max = y1.max(y2);
+                                if y_min < table_bbox.y1 && y_max > table_bbox.y0 {
+                                    v_lines.push((x, y_min, y_max));
+                                }
                             }
                         }
                     }
                     crate::entities::Segment::Rect { bbox } => {
-                        // Rects can also define boundaries
-                        if table_bbox.contains(bbox) {
+                        // Relaxed check: intersection instead of strict containment
+                        // To account for slight misalignments
+                        if table_bbox.relaxed_iou(bbox) > 0.0 {
                             h_lines.push((bbox.y0, bbox.x0, bbox.x1));
                             h_lines.push((bbox.y1, bbox.x0, bbox.x1));
                             v_lines.push((bbox.x0, bbox.y0, bbox.y1));
@@ -455,6 +510,7 @@ impl TableParser {
             caption: None,
             rows,
             has_borders: true,
+            algorithm: TableAlgorithm::Lattice,
         })
     }
 
@@ -463,18 +519,27 @@ impl TableParser {
         image: &DynamicImage,
         lines: &[crate::entities::Line],
         table_bbox: &BBox,
+        downscale_factor: f32,
     ) -> Result<TableBlock> {
         let transformer = match &self.transformer {
             Some(t) => t,
             None => return Ok(TableBlock::default()),
         };
 
-        // 1. Crop image to table_bbox
-        // We assume table_bbox is in absolute coordinates matching the image dimensions
-        let x0 = (table_bbox.x0 as u32).min(image.width());
-        let y0 = (table_bbox.y0 as u32).min(image.height());
-        let w = (table_bbox.width() as u32).min(image.width() - x0).max(1);
-        let h = (table_bbox.height() as u32).min(image.height() - y0).max(1);
+        // 1. Crop image to table_bbox (in image coordinates)
+        let scale = 1.0 / downscale_factor;
+        let x0 = (table_bbox.x0 * scale) as u32;
+        let y0 = (table_bbox.y0 * scale) as u32;
+        // Ensure we don't go out of bounds
+        let x0 = x0.min(image.width());
+        let y0 = y0.min(image.height());
+
+        // Calculate width/height in image coordinates
+        let w_img = ((table_bbox.width() * scale) as u32).max(1);
+        let h_img = ((table_bbox.height() * scale) as u32).max(1);
+
+        let w = w_img.min(image.width() - x0).max(1);
+        let h = h_img.min(image.height() - y0).max(1);
 
         let crop = image.crop_imm(x0, y0, w, h);
 
@@ -505,11 +570,16 @@ impl TableParser {
         for row_det in rows {
             let mut cells = Vec::new();
             for col_det in &cols {
+                let col_x0_pdf = (col_det.bbox.x0 + x0 as f32) * downscale_factor;
+                let col_x1_pdf = (col_det.bbox.x1 + x0 as f32) * downscale_factor;
+                let row_y0_pdf = (row_det.bbox.y0 + y0 as f32) * downscale_factor;
+                let row_y1_pdf = (row_det.bbox.y1 + y0 as f32) * downscale_factor;
+
                 let cell_bbox = BBox {
-                    x0: (col_det.bbox.x0 + table_bbox.x0).max(table_bbox.x0),
-                    y0: (row_det.bbox.y0 + table_bbox.y0).max(table_bbox.y0),
-                    x1: (col_det.bbox.x1 + table_bbox.x0).min(table_bbox.x1),
-                    y1: (row_det.bbox.y1 + table_bbox.y0).min(table_bbox.y1),
+                    x0: col_x0_pdf.max(table_bbox.x0),
+                    y0: row_y0_pdf.max(table_bbox.y0),
+                    x1: col_x1_pdf.min(table_bbox.x1),
+                    y1: row_y1_pdf.min(table_bbox.y1),
                 };
 
                 // Filter lines that fall into this cell
@@ -531,10 +601,10 @@ impl TableParser {
             table_rows.push(crate::blocks::TableRow {
                 cells,
                 bbox: BBox {
-                    x0: row_det.bbox.x0 + table_bbox.x0,
-                    y0: row_det.bbox.y0 + table_bbox.y0,
-                    x1: row_det.bbox.x1 + table_bbox.x0,
-                    y1: row_det.bbox.y1 + table_bbox.y0,
+                    x0: (row_det.bbox.x0 + x0 as f32) * downscale_factor,
+                    y0: (row_det.bbox.y0 + y0 as f32) * downscale_factor,
+                    x1: (row_det.bbox.x1 + x0 as f32) * downscale_factor,
+                    y1: (row_det.bbox.y1 + y0 as f32) * downscale_factor,
                 },
                 is_header: false,
             });
@@ -545,6 +615,7 @@ impl TableParser {
             caption: None,
             rows: table_rows,
             has_borders: true,
+            algorithm: TableAlgorithm::Vision,
         })
     }
 
@@ -570,6 +641,7 @@ impl TableParser {
                 caption: None,
                 rows: vec![],
                 has_borders: false,
+                algorithm: TableAlgorithm::Unknown,
             });
         }
 
@@ -593,6 +665,7 @@ impl TableParser {
             caption: None,
             rows,
             has_borders: false,
+            algorithm: TableAlgorithm::Stream,
         })
     }
 

@@ -194,7 +194,7 @@ pub(crate) fn parse_page_native(
     })
 }
 
-fn extract_page_paths(page: &PdfPage, _page_bbox: &BBox) -> Vec<PDFPath> {
+fn extract_page_paths(page: &PdfPage, page_bbox: &BBox) -> Vec<PDFPath> {
     let mut paths = Vec::new();
 
     for object in page.objects().iter() {
@@ -203,19 +203,30 @@ fn extract_page_paths(page: &PdfPage, _page_bbox: &BBox) -> Vec<PDFPath> {
             let mut current_point: Option<(f32, f32)> = None;
 
             for segment in path_obj.segments().iter() {
-                let point = segment.point();
                 match segment.segment_type() {
-                    PdfPathSegmentType::MoveTo => {
-                        current_point = Some((point.0.value, point.1.value));
-                    }
                     PdfPathSegmentType::LineTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // NOTE: PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        let converted_point = (x, converted_y);
+
                         if let Some(start) = current_point {
-                            let end = (point.0.value, point.1.value);
-                            segments.push(Segment::Line { start, end });
-                            current_point = Some(end);
+                            segments.push(Segment::Line {
+                                start,
+                                end: converted_point,
+                            });
+                            current_point = Some(converted_point);
                         } else {
-                            current_point = Some((point.0.value, point.1.value));
+                            current_point = Some(converted_point);
                         }
+                    }
+                    PdfPathSegmentType::MoveTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        current_point = Some((x, converted_y));
                     }
                     _ => {}
                 }

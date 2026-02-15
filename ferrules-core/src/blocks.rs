@@ -29,11 +29,21 @@ pub struct List {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub enum TableAlgorithm {
+    #[default]
+    Unknown,
+    Lattice,
+    Stream,
+    Vision,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TableBlock {
     pub(crate) id: usize,
     pub(crate) caption: Option<String>,
     pub rows: Vec<TableRow>,
     pub has_borders: bool,
+    pub algorithm: TableAlgorithm,
 }
 
 impl TableBlock {

@@ -11,7 +11,7 @@ use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
-    entities::{Element, ElementType, Line, PageID, StructuredPage},
+    entities::{Element, ElementType, Line, PDFPath, PageID, StructuredPage},
     error::FerrulesError,
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
@@ -162,6 +162,7 @@ pub async fn parse_page_full(
                 lines: Arc::clone(&text_lines_arc),
                 paths: Arc::clone(&paths_arc),
                 table_bbox: element.bbox.clone(),
+                downscale_factor,
                 metadata: crate::parse::table::TableMetadata {
                     response_tx: tx,
                     queue_time: Instant::now(),
@@ -188,6 +189,7 @@ pub async fn parse_page_full(
             need_ocr,
             &page_layout,
             &elements,
+            &paths_arc,
         )?
     };
 
@@ -226,6 +228,7 @@ fn debug_page(
     need_ocr: bool,
     page_layout: &[LayoutBBox],
     elements: &[Element],
+    paths: &[PDFPath],
 ) -> Result<(), FerrulesError> {
     let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
     let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
@@ -244,11 +247,22 @@ fn debug_page(
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
     let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
-    let final_img =
+    let final_img_buffer =
         draw_blocks(&blocks, page_image).map_err(|_| FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),
             page_idx,
         })?;
+
+    // Draw paths on final image for debugging
+    let dynamic_final_img = image::DynamicImage::ImageRgba8(final_img_buffer);
+    let final_img_with_paths =
+        crate::draw::draw_paths(paths, &dynamic_final_img).map_err(|_| {
+            FerrulesError::DebugPageError {
+                tmp_dir: tmp_dir.to_path_buf(),
+                page_idx,
+            }
+        })?;
+
     out_img
         .save(output_file)
         .map_err(|_| FerrulesError::DebugPageError {
@@ -256,7 +270,7 @@ fn debug_page(
             page_idx,
         })?;
 
-    final_img
+    final_img_with_paths
         .save(final_output_file)
         .map_err(|_| FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),
