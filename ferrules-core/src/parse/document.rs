@@ -1,4 +1,5 @@
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::path::PathBuf;
+use std::{sync::Arc, time::Instant};
 
 use std::ops::Range;
 

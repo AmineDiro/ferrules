@@ -237,8 +237,13 @@ fn debug_page(
     elements: &[Element],
     paths: &[PDFPath],
 ) -> Result<(), FerrulesError> {
-    let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-    let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
+    let images_dir = tmp_dir.join("images");
+    let blocks_dir = tmp_dir.join("blocks");
+    let _ = std::fs::create_dir_all(&images_dir);
+    let _ = std::fs::create_dir_all(&blocks_dir);
+
+    let output_file = images_dir.join(format!("page_{}.png", page_idx));
+    let final_output_file = blocks_dir.join(format!("page_blocks_{}.png", page_idx));
     let out_img = draw_text_lines(text_lines, page_image, need_ocr).map_err(|_| {
         FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),

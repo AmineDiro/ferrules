@@ -1,5 +1,5 @@
 [workspace]
-members = ["ferrules-core", "ferrules-cli", "ferrules-api"]
+members = ["ferrules-core", "ferrules-cli", "ferrules-api", "ferrules-debug"]
 resolver = "2"
 edition = "2021"
 
