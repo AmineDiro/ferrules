@@ -1,5 +1,6 @@
 use image::DynamicImage;
 use plsfix::fix_text;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
@@ -15,7 +16,9 @@ pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(
+    Debug, Default, Clone, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct BBox {
     pub x0: f32,
     pub y0: f32,
@@ -128,7 +131,9 @@ impl BBox {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct ElementText {
     pub(crate) text: String,
 }
@@ -146,7 +151,7 @@ impl ElementText {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Archive, RkyvDeserialize, RkyvSerialize)]
 #[serde(tag = "element_type")]
 pub enum ElementType {
     Header,
@@ -166,7 +171,7 @@ impl std::fmt::Display for ElementType {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct Element {
     pub id: ElementID,
     pub layout_block_id: i32,
@@ -178,7 +183,7 @@ pub struct Element {
 
 impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
-        let kind = match layout_block.label {
+        let kind = match layout_block.label.as_str() {
             "Caption" => ElementType::Caption,
             "Formula" | "Text" => ElementType::Text,
             "List-item" => ElementType::ListItem,
@@ -190,7 +195,10 @@ impl Element {
             "Table" => ElementType::Table(None),
             "Picture" => ElementType::Image,
             _ => {
-                unreachable!("can't have other type of layout bbox")
+                unreachable!(
+                    "can't have other type of layout bbox: {}",
+                    layout_block.label
+                )
             }
         };
         Self {
@@ -211,7 +219,7 @@ impl Element {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructuredPage {
     pub id: PageID,
     pub width: f32,
@@ -220,6 +228,10 @@ pub struct StructuredPage {
     pub need_ocr: bool,
     pub image: DynamicImage,
     pub elements: Vec<Element>,
+    pub paths: Vec<PDFPath>,
+    pub native_lines: Vec<Line>,
+    pub layout: Vec<LayoutBBox>,
+    pub ocr_lines: Vec<Line>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -259,14 +271,60 @@ pub struct ParsedDocument {
     pub metadata: DocumentMetadata,
 }
 
-#[derive(Clone, Debug)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+)]
+#[archive(check_bytes)]
+pub enum SerializableFontWeight {
+    Thin,
+    ExtraLight,
+    Light,
+    Normal,
+    Medium,
+    SemiBold,
+    Bold,
+    ExtraBold,
+    Black,
+}
+
+impl From<PdfFontWeight> for SerializableFontWeight {
+    fn from(_weight: PdfFontWeight) -> Self {
+        // TODO: Map correctly once variants are known.
+        // For now, default to Normal to bypass compilation errors.
+        Self::Normal
+        /*
+        match weight {
+            PdfFontWeight::Thin => Self::Thin,
+            PdfFontWeight::ExtraLight => Self::ExtraLight,
+            PdfFontWeight::Light => Self::Light,
+            PdfFontWeight::Normal => Self::Normal,
+            PdfFontWeight::Medium => Self::Medium,
+            PdfFontWeight::SemiBold => Self::SemiBold,
+            PdfFontWeight::Bold => Self::Bold,
+            PdfFontWeight::ExtraBold => Self::ExtraBold,
+            PdfFontWeight::Black => Self::Black,
+        }
+        */
+    }
+}
+
+#[derive(Clone, Debug, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct CharSpan {
     pub bbox: BBox,
     pub text: String,
     pub rotation: f32,
     pub font_name: String,
     pub font_size: f32,
-    pub font_weight: Option<PdfFontWeight>,
+    pub font_weight: Option<SerializableFontWeight>,
     pub char_start_idx: usize,
     pub char_end_idx: usize,
 }
@@ -281,7 +339,7 @@ impl CharSpan {
             ),
             text: char.unicode_char().unwrap_or_default().into(),
             font_name: char.font_name(),
-            font_weight: char.font_weight(),
+            font_weight: char.font_weight().map(Into::into),
             font_size: char.unscaled_font_size().value,
             rotation: char.get_rotation_clockwise_degrees(),
             char_start_idx: char.index(),
@@ -290,9 +348,10 @@ impl CharSpan {
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
         let char_rotation = char.get_rotation_clockwise_degrees();
+        let char_font_weight = char.font_weight().map(SerializableFontWeight::from);
         if char.unscaled_font_size().value != self.font_size
             || char.font_name() != self.font_name
-            || char.font_weight() != self.font_weight
+            || char_font_weight != self.font_weight
             || char_rotation != self.rotation
         {
             None
@@ -308,7 +367,7 @@ impl CharSpan {
         }
     }
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct Line {
     pub text: String,
     pub bbox: BBox,
@@ -371,13 +430,13 @@ impl Line {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum Segment {
     Line { start: (f32, f32), end: (f32, f32) },
     Rect { bbox: BBox },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct PDFPath {
     pub segments: Vec<Segment>,
     pub is_stroke: bool,

@@ -13,6 +13,7 @@ use super::{
 use crate::entities::DocumentMetadata;
 use crate::error::FerrulesError;
 use crate::{
+    blocks::Block,
     entities::{ElementType, Page, PageID, ParsedDocument, StructuredPage},
     layout::{
         model::{ORTConfig, ORTLayoutParser},
@@ -181,17 +182,21 @@ impl FerrulesParser {
         let title_level = title_levels_kmeans(&titles, 6);
 
         let doc_pages = parsed_pages
-            .into_iter()
+            .iter()
             .map(|sp| Page {
                 id: sp.id,
                 width: sp.width,
                 height: sp.height,
                 need_ocr: sp.need_ocr,
-                image: sp.image,
+                image: sp.image.clone(),
             })
             .collect();
 
         let blocks = merge_elements_into_blocks(all_elements, title_level)?;
+
+        if let Some(ref debug_dir) = debug_dir {
+            self.save_debug_binary(debug_dir, &doc_name, &parsed_pages, &blocks);
+        }
 
         let duration = start_time.elapsed();
 
@@ -202,6 +207,51 @@ impl FerrulesParser {
             debug_path: debug_dir,
             metadata: DocumentMetadata::new(duration),
         })
+    }
+
+    fn save_debug_binary(
+        &self,
+        debug_dir: &std::path::Path,
+        doc_name: &str,
+        parsed_pages: &[StructuredPage],
+        blocks: &[Block],
+    ) {
+        let mut debug_pages = Vec::new();
+        for sp in parsed_pages {
+            let mut page_blocks = Vec::new();
+            for block in blocks {
+                if block.pages_id.contains(&sp.id) {
+                    page_blocks.push(block.clone());
+                }
+            }
+
+            let mut image_data = Vec::new();
+            let _ = sp.image.write_to(
+                &mut std::io::Cursor::new(&mut image_data),
+                image::ImageFormat::Png,
+            );
+
+            debug_pages.push(crate::debug_info::DebugPage {
+                page_number: sp.id,
+                native_lines: sp.native_lines.clone(),
+                paths: sp.paths.clone(),
+                layout_bboxes: sp.layout.clone(),
+                ocr_lines: sp.ocr_lines.clone(),
+                elements: sp.elements.clone(),
+                blocks: page_blocks,
+                image_data,
+                width: sp.width,
+                height: sp.height,
+            });
+        }
+        let debug_doc = crate::debug_info::DebugDocument {
+            name: doc_name.to_string(),
+            pages: debug_pages,
+        };
+
+        let debug_file = debug_dir.join(format!("{}.ferr", doc_name));
+        let bytes = rkyv::to_bytes::<_, 1024>(&debug_doc).expect("failed to serialize debug doc");
+        std::fs::write(debug_file, bytes).expect("failed to write debug file");
     }
 
     #[allow(clippy::too_many_arguments)]

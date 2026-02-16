@@ -143,12 +143,13 @@ pub async fn parse_page_full(
         .map_err(|_| FerrulesError::LayoutParsingError)?
         .map_err(|_| FerrulesError::LayoutParsingError)?;
 
-    let (text_lines, need_ocr) =
+    let native_lines_captured = text_lines.clone();
+    let (text_lines_processed, need_ocr) =
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
 
     // Merging elements with layout
-    let mut elements = build_page_elements(&page_layout, &text_lines, page_id)?;
-    let text_lines_arc = Arc::new(text_lines.clone());
+    let mut elements = build_page_elements(&page_layout, &text_lines_processed, page_id)?;
+    let text_lines_arc = Arc::new(text_lines_processed.clone());
     let paths_arc = Arc::new(paths);
 
     // Table parsing
@@ -182,7 +183,7 @@ pub async fn parse_page_full(
             &tmp_dir,
             page_id,
             &page_image_scale1,
-            &text_lines,
+            &text_lines_processed,
             need_ocr,
             &page_layout,
             &elements,
@@ -196,7 +197,15 @@ pub async fn parse_page_full(
         height: page_bbox.height(),
         image: page_image_scale1,
         elements,
+        paths: paths_arc.as_ref().clone(),
         need_ocr,
+        native_lines: native_lines_captured,
+        layout: page_layout,
+        ocr_lines: if need_ocr {
+            text_lines_processed.clone()
+        } else {
+            vec![]
+        },
     };
 
     span.record(
@@ -213,6 +222,7 @@ pub async fn parse_page_full(
         format!("{:?}", parse_native_metadata.parse_native_duration_ms),
     );
     // TODO: add OCR timings
+    // TODO: add table parser timings
 
     Ok(structured_page)
 }

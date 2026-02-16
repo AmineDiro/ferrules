@@ -125,19 +125,7 @@ impl HTMLRenderer {
                         }
                         table_html.push_str(">");
 
-                        if !cell.content.is_empty() {
-                            // Render content into a temporary container (div)
-                            let mut cell_container = HtmlElement::new(HtmlTag::Div);
-                            for block in &cell.content {
-                                Self::render_block_to_container(
-                                    block,
-                                    &mut cell_container,
-                                    img_src_path,
-                                    list_regex,
-                                )?;
-                            }
-                            table_html.push_str(&cell_container.to_html_string());
-                        } else if !cell.text.is_empty() {
+                        if !cell.text.is_empty() {
                             table_html.push_str(&cell.text);
                         }
 
