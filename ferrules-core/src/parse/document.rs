@@ -142,6 +142,7 @@ impl FerrulesParser {
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip(self, doc, page_callback), fields(doc_name = %doc_name))]
     pub async fn parse_document<F>(
         &self,
         doc: &[u8],
@@ -256,7 +257,7 @@ impl FerrulesParser {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip(self, data, callback), fields(flatten_pdf = flatten_pdf, page_range = ?page_range))]
     async fn parse_doc_pages<F>(
         &self,
         data: &[u8],

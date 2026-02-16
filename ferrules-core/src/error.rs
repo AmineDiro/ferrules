@@ -27,4 +27,6 @@ pub enum FerrulesError {
     ParseTextError { tmp_dir: PathBuf, page_idx: PageID },
     #[error("table transformer model error: {0}")]
     TableTransformerModelError(String),
+    #[error("table parser error: {0}")]
+    TableParserError(String),
 }
