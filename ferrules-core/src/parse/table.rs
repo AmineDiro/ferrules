@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
 use ndarray::{Array4, Axis};
@@ -19,6 +21,7 @@ use crate::layout::model::{nms, LayoutBBox};
 #[derive(Debug)]
 pub struct TableMetadata {
     pub(crate) response_tx: oneshot::Sender<Result<ParseTableResponse, FerrulesError>>,
+    pub(crate) queue_time: Instant,
 }
 
 #[derive(Debug)]
@@ -35,6 +38,8 @@ pub(crate) struct ParseTableRequest {
 #[derive(Debug)]
 pub(crate) struct ParseTableResponse {
     pub(crate) table_block: TableBlock,
+    pub(crate) table_parse_duration_ms: u128,
+    pub(crate) table_queue_time_ms: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -65,10 +70,17 @@ async fn start_table_parser(
     table_parser: Arc<TableParser>,
     mut input_rx: mpsc::Receiver<(ParseTableRequest, Span)>,
 ) {
-    let s = Arc::new(Semaphore::new(4)); // Limit concurrent table workers
+    // TODO: make this configurable
+    let s = Arc::new(Semaphore::new(8));
     while let Some((req, span)) = input_rx.recv().await {
+        let queue_time = req.metadata.queue_time.elapsed().as_millis();
+        let page_id = req.page_id;
+        tracing::debug!("table request queue time for page {page_id} took: {queue_time}ms");
         let _guard = span.enter();
-        tokio::spawn(handle_table_request(s.clone(), table_parser.clone(), req).in_current_span());
+        tokio::spawn(
+            handle_table_request(s.clone(), table_parser.clone(), req, queue_time)
+                .in_current_span(),
+        );
     }
 }
 
@@ -76,6 +88,7 @@ async fn handle_table_request(
     s: Arc<Semaphore>,
     _parser: Arc<TableParser>,
     req: ParseTableRequest,
+    table_queue_time_ms: u128,
 ) {
     let _permit = s.acquire().await.unwrap();
 
@@ -95,6 +108,7 @@ async fn handle_table_request(
     let page_image = page_image.clone();
     let table_bbox = table_bbox.clone();
 
+    let start = Instant::now();
     let table_result = tokio::task::spawn_blocking(move || {
         parser.parse(
             page_id,
@@ -106,6 +120,8 @@ async fn handle_table_request(
         )
     })
     .await;
+    let inference_duration = start.elapsed().as_millis();
+    tracing::debug!("table inference time for page {page_id} took: {inference_duration} ms");
 
     // Handle JoinError from spawn_blocking
     let table_result = match table_result {
@@ -115,7 +131,11 @@ async fn handle_table_request(
 
     drop(_permit);
 
-    let response = table_result.map(|t| ParseTableResponse { table_block: t });
+    let response = table_result.map(|t| ParseTableResponse {
+        table_block: t,
+        table_parse_duration_ms: inference_duration,
+        table_queue_time_ms,
+    });
 
     let _ = metadata.response_tx.send(response);
 }
@@ -407,6 +427,7 @@ impl TableParser {
     }
 
     /// Main entry point to parse a table within a given bounding box on a page.
+    #[tracing::instrument(skip(self, lines, paths, page_image))]
     pub fn parse(
         &self,
         _page_id: PageID,
@@ -478,6 +499,7 @@ impl TableParser {
         Ok(table)
     }
 
+    #[tracing::instrument(skip(self, lines, paths))]
     fn parse_lattice(
         &self,
         lines: &[crate::entities::Line],
@@ -731,6 +753,7 @@ impl TableParser {
         })
     }
 
+    #[tracing::instrument(skip(self, image, lines))]
     fn parse_vision(
         &self,
         image: &DynamicImage,
@@ -919,6 +942,7 @@ impl TableParser {
         })
     }
 
+    #[tracing::instrument(skip(self, lines))]
     fn parse_stream(
         &self,
         lines: &[crate::entities::Line],

@@ -99,7 +99,10 @@ fn parse_page_text(
     fields(
         layout_queue_time_ms,
         layout_parse_duration_ms,
+        layout_parse_duration_ms,
         parse_native_duration_ms,
+        table_queue_time_ms,
+        table_parse_duration_ms,
     )
 )]
 pub async fn parse_page_full(
@@ -154,6 +157,8 @@ pub async fn parse_page_full(
 
     // Table parsing
     let mut set = JoinSet::new();
+    let mut total_table_parse_duration = 0;
+    let mut total_table_queue_time = 0;
     for (idx, element) in elements.iter().enumerate() {
         if matches!(element.kind, ElementType::Table(_)) {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -164,7 +169,10 @@ pub async fn parse_page_full(
                 paths: Arc::clone(&paths_arc),
                 table_bbox: element.bbox.clone(),
                 downscale_factor,
-                metadata: crate::parse::table::TableMetadata { response_tx: tx },
+                metadata: crate::parse::table::TableMetadata {
+                    response_tx: tx,
+                    queue_time: Instant::now(),
+                },
             };
             table_queue.push(req).await?;
             set.spawn(async move { (idx, rx.await) });
@@ -175,6 +183,8 @@ pub async fn parse_page_full(
         if let Ok((idx, Ok(Ok(resp)))) = res {
             if let ElementType::Table(ref mut table_opt) = elements[idx].kind {
                 *table_opt = Some(resp.table_block);
+                total_table_parse_duration += resp.table_parse_duration_ms;
+                total_table_queue_time += resp.table_queue_time_ms;
             }
         }
     }
@@ -222,6 +232,14 @@ pub async fn parse_page_full(
         format!("{:?}", parse_native_metadata.parse_native_duration_ms),
     );
     // TODO: add OCR timings
+    span.record(
+        "table_parse_duration_ms",
+        format!("{:?}", total_table_parse_duration),
+    );
+    span.record(
+        "table_queue_time_ms",
+        format!("{:?}", total_table_queue_time),
+    );
     // TODO: add table parser timings
 
     Ok(structured_page)
