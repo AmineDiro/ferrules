@@ -20,6 +20,12 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
     - Accelerate model inference on Apple Neural Engine (ANE)/GPU (using [`ort`](https://ort.pyke.io/) library).
     - Merges layout with PDF text lines for comprehensive document understanding.
 
+- **📊 Advanced Table Parsing:**
+    - Robust table structure recognition using three complementary algorithms.
+    - Intelligent fallback heuristics to ensure high-accuracy extraction across different table styles.
+    - Handles both bordered (Lattice) and borderless (Stream/Vision) tables.
+    - Extracts spanning cells and preserves cell alignment.
+
 - **🔄 Document Transformation:**
     - Groups captions, footers, and other elements intelligently.
     - Structures lists and merges blocks into cohesive sections.
@@ -87,23 +93,37 @@ To get detailed processing information and debug outputs:
 
 ```sh
 ferrules path/to/your.pdf --debug
-[00:00:02] [########################################] Parsed document in 257ms
-ℹ Debug output saved in: /var/folders/x1/1fktcq215tl73kk60bllw9rc0000gn/T/ferrules-XXXX
-✓ Results saved in: ./megatrends-results.json
 ```
 
-Debug mode generates visual output showing the parsing results for each page:
+Running with `--debug` will generate:
+1. Visual JSON results and cropped images (if enabled).
+2. A `.ferr` debug archive containing all intermediate states (layout, OCR, native lines, tables).
+
+### 🛠️ Visual Debugger (`ferrules-debug`)
+
+`ferrules-debug` is a lightweight, cross-platform visualizer built with [Iced](https://iced.rs/). It allows you to inspect exactly how the engine interpreted your document.
 
 <div align="center">
-    <img src="./imgs/deep_seek_page.png" alt="Debug Page 1" width="45%" style="margin-right: 2%"/>
-    <img src="./imgs/wizardoz_page.png" alt="Wizard of Oz, Scanned" width="45%"/>
+
+| Simple Layout Analysis | Complex Table Extraction |
+|:---:|:---:|
+| <img src="./imgs/ferrules_debug_simple.png" alt="Ferrules Debug Simple" height="350"> | <img src="./imgs/ferrules_debug_table_cells.png" alt="Ferrules Debug Table Cells" height="350"> |
+
 </div>
+**How to use:**
+1. Run the parser with the debug flag: `ferrules sample.pdf --debug`
+2. Open the resulting `.ferr` file: `ferrules-debug --file path/to/sample.ferr`
+3. Toggle layers (Layout, OCR, Tables, Blocks) to inspect the parsing logic.
 
-Each color represents different elements detected in the document:
+### 🧠 Table Parsing Algorithms
 
-- 🟦 Layout detection
-- 🟩 OCR parsed lines
-- 🟥 Pdfium parsed lines
+Ferrules uses a tiered approach to table extraction:
+
+1.  **Lattice**: Detects tables with explicit borders by analyzing PDF vector paths. It's the most accurate for traditional tables.
+2.  **Stream**: Used for tables without visible borders. It analyzes text alignment and whitespace gaps to reconstruct the grid.
+3.  **Vision (Table Transformer)**: A deep learning fallback using the Table Transformer model. It is triggered when the previous methods yield "suspicious" results (e.g., low cell density in a large area).
+
+**Heuristics**: The engine automatically sequences these algorithms. If a `Stream` result appears incomplete or messy, it triggers `Vision` to verify and improve the structure recognition.
 
 ### Available Options
 

@@ -37,23 +37,24 @@
 
 - Tables
 
-  - [ ] Extract tables
-  - [ ] Group captions with tables
+  - [x] Extract tables (Lattice, Stream, and Vision algorithms)
+  - [x] Spanning cells detection
+  - [ ] Group captions with tables (In Progress)
 
 - [ ] Render Document
 
   - [x] JSON renderer
     - [x] Crop images and save in directory if `--save_image` flag
-  - [ ] HTML renderer
-  - [ ] Markdown renderer (based on html renderer)
+  - [x] HTML renderer
+  - [x] Markdown renderer (using `html2md`)
 
 - CLI ferrules
 
   - [x] Add variables
-  - [x] Add debug flag
+  - [x] Add debug flag (Generates `.ferr` archive)
   - [x] Add range flag
   - [x] Configure hyperparams/execution providers
-  - [ ] Add export format -> JSON (default) or markdown
+  - [x] Add export format -> JSON, HTML, Markdown
 
 - [x] Build pdfium statically for Linux
 - [x] Change NMS algorithm to more robust one
@@ -85,6 +86,9 @@
   - [ ] Move to other Yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
   - [ ] Explore arena allocators (one per page)
   - [ ] String -> CowStr
+
+- **Tools & Debug**
+  - [x] `ferrules-debug`: Iced-based visual inspector for `.ferr` archives
 
 - Benchmark
   - [] Compare to unstructured, tika, docling
