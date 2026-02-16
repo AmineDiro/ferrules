@@ -1,10 +1,13 @@
+use crate::inspector::InspectorItem;
+use ferrules_core::blocks::ArchivedBlockType;
 use ferrules_core::debug_info::ArchivedDebugPage;
-use ferrules_core::entities::ArchivedSegment;
+use ferrules_core::entities::{ArchivedElementType, ArchivedSegment};
 use iced::mouse::{self, Cursor};
-use iced::widget::canvas::{self, Frame, Geometry, Image, Path, Program, Stroke};
+use iced::widget::canvas::{self, Frame, Geometry, Image, Path, Program, Stroke, Text};
 use iced::widget::image;
-use iced::{Color, Point, Rectangle, Renderer, Theme, Vector};
+use iced::{Color, Font, Point, Rectangle, Renderer, Theme, Vector};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PainterMode {
     Image,
     Overlay,
@@ -29,13 +32,7 @@ pub struct PagePainter<'a> {
 pub struct State {
     pub last_cursor_position: Point,
     pub is_panning: bool,
-    pub hovered_info: Option<HoverDetailed>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HoverDetailed {
-    pub title: String,
-    pub details: String,
+    pub hovered_info: Option<InspectorItem>,
 }
 
 impl Default for State {
@@ -50,7 +47,7 @@ impl Default for State {
 
 #[derive(Debug, Clone)]
 pub enum CanvasMessage {
-    Hovered(Option<HoverDetailed>),
+    Hovered(Option<InspectorItem>),
     ZoomChanged(f32, Point),
     OffsetChanged(Vector),
 }
@@ -65,7 +62,6 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> (canvas::event::Status, Option<CanvasMessage>) {
-        // Only Overlay handles interactions
         if let PainterMode::Image = self.mode {
             return (canvas::event::Status::Ignored, None);
         }
@@ -161,13 +157,13 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                 frame.draw_image(image_rect, img);
             }
             PainterMode::Overlay => {
-                // Colors
-                let red = Color::from_rgb(1.0, 0.0, 0.0);
-                let blue = Color::from_rgb(0.2, 0.6, 1.0);
-                let green = Color::from_rgb(0.2, 1.0, 0.4);
-                let yellow = Color::from_rgb(1.0, 1.0, 0.0);
-                let purple = Color::from_rgb(0.8, 0.2, 1.0);
-                let path_col = Color::from_rgb(0.5, 0.5, 0.5);
+                // Vibrant Dracula Palette
+                let red = Color::from_rgb(1.0, 0.33, 0.33); // #ff5555
+                let green = Color::from_rgb(0.31, 1.0, 0.44); // #50fa7b
+                let purple = Color::from_rgb(0.74, 0.57, 0.97); // #bd93f9
+                let cyan = Color::from_rgb(0.54, 0.88, 1.0); // #8be9fd
+                let orange = Color::from_rgb(1.0, 0.72, 0.42); // #ffb86c
+                let path_col = Color::from_rgba(0.9, 0.9, 0.9, 0.2);
 
                 if self.show_paths {
                     for path in self.page.paths.as_slice() {
@@ -184,7 +180,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                                     );
                                     frame.stroke(
                                         &Path::line(p1, p2),
-                                        Stroke::default().with_color(path_col).with_width(1.5),
+                                        Stroke::default().with_color(path_col).with_width(0.8),
                                     );
                                 }
                                 ArchivedSegment::Rect { bbox } => {
@@ -199,7 +195,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                                     );
                                     frame.stroke(
                                         &Path::rectangle(rect.position(), rect.size()),
-                                        Stroke::default().with_color(path_col).with_width(1.5),
+                                        Stroke::default().with_color(path_col).with_width(0.8),
                                     );
                                 }
                             }
@@ -220,7 +216,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(red).with_width(1.5),
+                            Stroke::default().with_color(red).with_width(0.8),
                         );
                     }
                 }
@@ -238,7 +234,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(blue).with_width(1.5),
+                            Stroke::default().with_color(cyan).with_width(0.8),
                         );
                     }
                 }
@@ -256,7 +252,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(green).with_width(2.0),
+                            Stroke::default().with_color(green).with_width(1.2),
                         );
                     }
                 }
@@ -274,7 +270,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(yellow).with_width(2.5),
+                            Stroke::default().with_color(orange).with_width(1.5),
                         );
                     }
                 }
@@ -292,61 +288,70 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(purple).with_width(3.0),
+                            Stroke::default().with_color(purple).with_width(2.0),
                         );
                     }
                 }
 
                 if let Some(hover) = &state.hovered_info {
-                    let mut highlight_bbox = None;
-                    if hover.title.starts_with("Element") {
-                        if let Some(id_str) = hover.title.split('#').last() {
-                            if let Ok(id) = id_str.parse::<usize>() {
-                                if let Some(e) = self
-                                    .page
-                                    .elements
-                                    .as_slice()
-                                    .iter()
-                                    .find(|e| (e.id as usize) == id)
-                                {
-                                    highlight_bbox = Some(&e.bbox);
-                                }
-                            }
-                        }
-                    } else if hover.title.starts_with("Block") {
-                        if let Some(id_str) = hover.title.split('#').last() {
-                            if let Ok(id) = id_str.parse::<usize>() {
-                                if let Some(b) = self
-                                    .page
-                                    .blocks
-                                    .as_slice()
-                                    .iter()
-                                    .find(|b| (b.id as usize) == id)
-                                {
-                                    highlight_bbox = Some(&b.bbox);
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some(bbox) = highlight_bbox {
+                    if let Some(bbox) = self.get_bbox_from_item(hover) {
                         let rect = self.to_rect(
-                            bbox.x0,
-                            bbox.y0,
-                            bbox.x1,
-                            bbox.y1,
+                            bbox[0],
+                            bbox[1],
+                            bbox[2],
+                            bbox[3],
                             final_scale,
                             total_offset_x,
                             total_offset_y,
                         );
+
+                        // Highlight fill
                         frame.fill(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Color::from_rgba(1.0, 1.0, 1.0, 0.4),
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.1),
                         );
+                        // Highlight stroke
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(Color::WHITE).with_width(3.0),
+                            Stroke::default().with_color(Color::WHITE).with_width(2.0),
                         );
+
+                        // Label etiquette
+                        let label_text = self.get_label_from_item(hover);
+                        if !label_text.is_empty() {
+                            let label_bg_color = match hover {
+                                InspectorItem::Block { .. } => purple,
+                                InspectorItem::Element { .. } => orange,
+                                InspectorItem::Layout { .. } => green,
+                                _ => Color::from_rgb(0.2, 0.2, 0.2),
+                            };
+
+                            let label_size = 12.0;
+                            let padding = 6.0;
+                            let text_width = label_text.len() as f32 * 7.5; // Approximation
+
+                            // Draw etiquette box
+                            frame.fill(
+                                &Path::rectangle(
+                                    Point::new(rect.x, rect.y - 26.0),
+                                    [text_width + padding * 2.0, label_size + padding * 1.5].into(),
+                                ),
+                                label_bg_color,
+                            );
+
+                            // Draw text on etiquette
+                            frame.fill_text(Text {
+                                content: label_text,
+                                position: Point::new(rect.x + padding, rect.y - 22.0),
+                                color: Color::WHITE,
+                                size: label_size.into(),
+                                font: Font {
+                                    weight: iced::font::Weight::Bold,
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             }
@@ -367,7 +372,6 @@ impl<'a> PagePainter<'a> {
         off_x: f32,
         off_y: f32,
     ) -> Rectangle {
-        // Ensure x,y are top-left
         let x = x0.min(x1);
         let y = y0.min(y1);
         let w = (x1 - x0).abs();
@@ -381,7 +385,25 @@ impl<'a> PagePainter<'a> {
         }
     }
 
-    fn get_hover_detailed(&self, pos: Point, bounds: Rectangle) -> Option<HoverDetailed> {
+    fn get_bbox_from_item(&self, item: &InspectorItem) -> Option<[f32; 4]> {
+        match item {
+            InspectorItem::Block { bbox, .. } => Some(*bbox),
+            InspectorItem::Element { bbox, .. } => Some(*bbox),
+            InspectorItem::Layout { bbox, .. } => Some(*bbox),
+            InspectorItem::None => None,
+        }
+    }
+
+    fn get_label_from_item(&self, item: &InspectorItem) -> String {
+        match item {
+            InspectorItem::Block { kind, .. } => kind.clone(),
+            InspectorItem::Element { kind, .. } => kind.clone(),
+            InspectorItem::Layout { label, .. } => label.clone(),
+            InspectorItem::None => String::new(),
+        }
+    }
+
+    fn get_hover_detailed(&self, pos: Point, bounds: Rectangle) -> Option<InspectorItem> {
         let fit_scale_x = bounds.width / self.page.width;
         let fit_scale_y = bounds.height / self.page.height;
         let fit_scale = fit_scale_x.min(fit_scale_y);
@@ -394,6 +416,7 @@ impl<'a> PagePainter<'a> {
         let px = (pos.x - total_offset_x) / final_scale;
         let py = (pos.y - total_offset_y) / final_scale;
 
+        // Hit testing order: Blocks -> Elements -> Layout
         if self.show_blocks {
             for block in self.page.blocks.as_slice() {
                 if px >= block.bbox.x0
@@ -401,16 +424,20 @@ impl<'a> PagePainter<'a> {
                     && py >= block.bbox.y0
                     && py <= block.bbox.y1
                 {
-                    return Some(HoverDetailed {
-                        title: format!("Block #{}", block.id),
-                        details: format!(
-                            "BBox: [{:.1}, {:.1}, {:.1}, {:.1}]\nPages: {:?}",
-                            block.bbox.x0,
-                            block.bbox.y0,
-                            block.bbox.x1,
-                            block.bbox.y1,
-                            block.pages_id
-                        ),
+                    let block_type = match &block.kind {
+                        ArchivedBlockType::Header(_) => "Header",
+                        ArchivedBlockType::Footer(_) => "Footer",
+                        ArchivedBlockType::Title(_) => "Title",
+                        ArchivedBlockType::ListBlock(_) => "List",
+                        ArchivedBlockType::TextBlock(_) => "Text",
+                        ArchivedBlockType::Image(_) => "Image",
+                        ArchivedBlockType::Table(_) => "Table",
+                    };
+                    return Some(InspectorItem::Block {
+                        id: block.id as usize,
+                        kind: block_type.to_string(),
+                        bbox: [block.bbox.x0, block.bbox.y0, block.bbox.x1, block.bbox.y1],
+                        pages: block.pages_id.iter().map(|&id| id as usize).collect(),
                     });
                 }
             }
@@ -423,17 +450,43 @@ impl<'a> PagePainter<'a> {
                     && py >= element.bbox.y0
                     && py <= element.bbox.y1
                 {
-                    return Some(HoverDetailed {
-                        title: format!("Element #{}", element.id),
-                        details: format!(
-                            "BBox: [{:.1}, {:.1}, {:.1}, {:.1}]\nText: {}\nLayout ID: {}",
+                    let elem_type = match &element.kind {
+                        ArchivedElementType::Header => "Header",
+                        ArchivedElementType::FootNote => "FootNote",
+                        ArchivedElementType::Footer => "Footer",
+                        ArchivedElementType::Text => "Text",
+                        ArchivedElementType::Title => "Title",
+                        ArchivedElementType::Subtitle => "Subtitle",
+                        ArchivedElementType::ListItem => "ListItem",
+                        ArchivedElementType::Caption => "Caption",
+                        ArchivedElementType::Image => "Image",
+                        ArchivedElementType::Table(_) => "Table",
+                    };
+                    return Some(InspectorItem::Element {
+                        id: element.id as usize,
+                        kind: elem_type.to_string(),
+                        bbox: [
                             element.bbox.x0,
                             element.bbox.y0,
                             element.bbox.x1,
                             element.bbox.y1,
-                            element.text_block.text.as_str(),
-                            element.layout_block_id
-                        ),
+                        ],
+                        layout_ref: element.layout_block_id,
+                        text: element.text_block.text.to_string(),
+                    });
+                }
+            }
+        }
+
+        if self.show_layout {
+            for lay in self.page.layout_bboxes.as_slice() {
+                if px >= lay.bbox.x0 && px <= lay.bbox.x1 && py >= lay.bbox.y0 && py <= lay.bbox.y1
+                {
+                    return Some(InspectorItem::Layout {
+                        id: lay.id,
+                        label: lay.label.to_string(),
+                        proba: lay.proba,
+                        bbox: [lay.bbox.x0, lay.bbox.y0, lay.bbox.x1, lay.bbox.y1],
                     });
                 }
             }
