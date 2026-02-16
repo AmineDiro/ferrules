@@ -1,10 +1,10 @@
 use clap::Parser;
 use ferrules_core::debug_info::DebugDocument;
 use iced::widget::{
-    button, canvas, checkbox, column, container, horizontal_space, image, row, slider, text, Space,
-    Tooltip,
+    Space, Tooltip, button, canvas, checkbox, column, container, horizontal_space, image, row,
+    slider, text,
 };
-use iced::{event, window, Alignment, Color, Element, Event, Length, Task, Theme, Vector};
+use iced::{Alignment, Color, Element, Event, Length, Task, Theme, Vector, event, window};
 use memmap2::Mmap;
 use rkyv::archived_root;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ mod inspector;
 mod painter;
 pub mod theme;
 pub mod widgets;
-use inspector::{view_inspector, InspectorItem, InspectorSection};
+use inspector::{InspectorItem, InspectorSection, view_inspector};
 use painter::{CanvasMessage, PagePainter, PainterMode};
 
 #[derive(Parser, Debug)]
@@ -48,6 +48,7 @@ struct FerrulesDebug {
     show_elements: bool,
     show_blocks: bool,
     show_paths: bool,
+    show_tables: bool,
 
     hovered_info: InspectorItem,
     selected_info: Option<InspectorItem>,
@@ -57,6 +58,7 @@ struct FerrulesDebug {
     inspector_block_open: bool,
     inspector_element_open: bool,
     inspector_layout_open: bool,
+    inspector_cell_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +83,7 @@ enum Layer {
     Elements,
     Blocks,
     Paths,
+    Tables,
 }
 
 impl FerrulesDebug {
@@ -97,12 +100,14 @@ impl FerrulesDebug {
                 show_elements: true,
                 show_blocks: true,
                 show_paths: true,
+                show_tables: true,
                 hovered_info: InspectorItem::None,
                 selected_info: None,
                 sidebar_open: true,
                 inspector_block_open: true,
                 inspector_element_open: true,
                 inspector_layout_open: false,
+                inspector_cell_open: true,
             },
             if let Some(path) = file_path {
                 Task::done(Message::FileSelected(Some(path)))
@@ -126,6 +131,7 @@ impl FerrulesDebug {
                     Layer::Elements => self.show_elements = !self.show_elements,
                     Layer::Blocks => self.show_blocks = !self.show_blocks,
                     Layer::Paths => self.show_paths = !self.show_paths,
+                    Layer::Tables => self.show_tables = !self.show_tables,
                 }
                 Task::none()
             }
@@ -213,6 +219,7 @@ impl FerrulesDebug {
                     InspectorSection::Layout => {
                         self.inspector_layout_open = !self.inspector_layout_open
                     }
+                    InspectorSection::Cell => self.inspector_cell_open = !self.inspector_cell_open,
                 }
                 Task::none()
             }
@@ -307,6 +314,12 @@ impl FerrulesDebug {
                             self.show_elements,
                             Layer::Elements,
                             theme::PEACH
+                        ),
+                        self.layer_checkbox(
+                            "Tables & Cells",
+                            self.show_tables,
+                            Layer::Tables,
+                            theme::ORANGE
                         ),
                         self.layer_checkbox(
                             "Structural Blocks",
@@ -417,9 +430,11 @@ impl FerrulesDebug {
                         self.inspector_block_open,
                         self.inspector_element_open,
                         self.inspector_layout_open,
+                        self.inspector_cell_open,
                         Message::ToggleInspectorSection(InspectorSection::Block),
                         Message::ToggleInspectorSection(InspectorSection::Element),
                         Message::ToggleInspectorSection(InspectorSection::Layout),
+                        Message::ToggleInspectorSection(InspectorSection::Cell),
                     )
                 ]
                 .padding(theme::PADDING_MD),
@@ -440,6 +455,7 @@ impl FerrulesDebug {
                 show_elements: self.show_elements,
                 show_blocks: self.show_blocks,
                 show_paths: self.show_paths,
+                show_tables: self.show_tables,
                 selected_item: self.selected_info.clone(),
             };
 
@@ -455,6 +471,7 @@ impl FerrulesDebug {
                 show_elements: self.show_elements,
                 show_blocks: self.show_blocks,
                 show_paths: self.show_paths,
+                show_tables: self.show_tables,
                 selected_item: self.selected_info.clone(),
             };
 

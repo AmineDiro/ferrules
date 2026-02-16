@@ -4,12 +4,30 @@ use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length};
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct InspectorTableDetails {
+    pub algorithm: String,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectorCell {
+    pub row_idx: usize,
+    pub col_idx: usize,
+    pub row_span: u8,
+    pub col_span: u8,
+    pub text: String,
+    pub bbox: [f32; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct InspectorBlock {
     pub id: usize,
     pub kind: String,
     pub bbox: [f32; 4],
     pub pages: Vec<usize>,
     pub text: String,
+    pub table_details: Option<InspectorTableDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +53,7 @@ pub enum InspectorItem {
         block: Option<InspectorBlock>,
         element: Option<InspectorElement>,
         layout: Option<InspectorLayout>,
+        cell: Option<InspectorCell>,
     },
     None,
 }
@@ -44,6 +63,7 @@ pub enum InspectorSection {
     Block,
     Element,
     Layout,
+    Cell,
 }
 
 pub fn view_inspector<'a, Message>(
@@ -51,9 +71,11 @@ pub fn view_inspector<'a, Message>(
     block_open: bool,
     element_open: bool,
     layout_open: bool,
+    cell_open: bool,
     on_toggle_block: Message,
     on_toggle_element: Message,
     on_toggle_layout: Message,
+    on_toggle_cell: Message,
 ) -> Element<'a, Message>
 where
     Message: 'a + Clone,
@@ -63,13 +85,24 @@ where
             block,
             element,
             layout,
+            cell,
         } => {
             let mut sections = column![].spacing(theme::SPACING_MD);
 
+            if let Some(c) = cell {
+                sections = sections.push(render_foldable_section(
+                    "CELL".to_string(),
+                    format!("R{} C{}", c.row_idx, c.col_idx),
+                    cell_open,
+                    || render_cell_details(c),
+                    on_toggle_cell.clone(),
+                ));
+            }
+
             if let Some(e) = element {
                 sections = sections.push(render_foldable_section(
-                    "ELEMENT",
-                    &e.kind,
+                    "ELEMENT".to_string(),
+                    e.kind.clone(),
                     element_open,
                     || render_element_details(e),
                     on_toggle_element.clone(),
@@ -78,8 +111,8 @@ where
 
             if let Some(b) = block {
                 sections = sections.push(render_foldable_section(
-                    "BLOCK",
-                    &b.kind,
+                    "BLOCK".to_string(),
+                    b.kind.clone(),
                     block_open,
                     || render_block_details(b),
                     on_toggle_block.clone(),
@@ -88,8 +121,8 @@ where
 
             if let Some(l) = layout {
                 sections = sections.push(render_foldable_section(
-                    "LAYOUT",
-                    &l.label,
+                    "LAYOUT".to_string(),
+                    l.label.clone(),
                     layout_open,
                     || render_layout_details(l),
                     on_toggle_layout.clone(),
@@ -116,8 +149,8 @@ where
 }
 
 fn render_foldable_section<'a, Message>(
-    title: &'a str,
-    subtitle: &'a str,
+    title: String,
+    subtitle: String,
     is_open: bool,
     content_fn: impl Fn() -> Element<'a, Message>,
     on_toggle: Message,
@@ -172,6 +205,19 @@ fn render_block_details<'a, Message: 'a>(b: &InspectorBlock) -> Element<'a, Mess
         widgets::field::<Message>("Pages", format!("{:?}", b.pages)),
     ]
     .spacing(theme::SPACING_MD);
+
+    if let Some(td) = &b.table_details {
+        col = col.push(
+            column![
+                widgets::v_space(theme::SPACING_SM),
+                widgets::section_header("Table Info"),
+                widgets::field::<Message>("Algorithm", td.algorithm.clone()),
+                widgets::field::<Message>("Rows", td.rows.to_string()),
+                widgets::field::<Message>("Columns", td.cols.to_string()),
+            ]
+            .spacing(theme::SPACING_SM),
+        );
+    }
 
     if !b.text.is_empty() {
         col = col.push(
@@ -256,4 +302,29 @@ fn bbox_field<'a, Message: 'a>(bbox: &[f32; 4]) -> Element<'a, Message> {
     ]
     .spacing(2)
     .into()
+}
+
+fn render_cell_details<'a, Message: 'a>(c: &InspectorCell) -> Element<'a, Message> {
+    let mut col = column![
+        widgets::field::<Message>(
+            "Position",
+            format!("Row: {}, Col: {}", c.row_idx, c.col_idx)
+        ),
+        widgets::field::<Message>("Span", format!("R: {}, C: {}", c.row_span, c.col_span)),
+        bbox_field::<Message>(&c.bbox),
+    ]
+    .spacing(theme::SPACING_SM);
+
+    if !c.text.is_empty() {
+        col = col.push(
+            column![
+                widgets::v_space(theme::SPACING_SM),
+                widgets::section_header("Cell Text"),
+                render_text_box::<Message>(&c.text)
+            ]
+            .spacing(theme::SPACING_SM),
+        );
+    }
+
+    col.into()
 }

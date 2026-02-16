@@ -1,4 +1,7 @@
-use crate::inspector::{InspectorBlock, InspectorElement, InspectorItem, InspectorLayout};
+use crate::inspector::{
+    InspectorBlock, InspectorCell, InspectorElement, InspectorItem, InspectorLayout,
+    InspectorTableDetails,
+};
 use ferrules_core::blocks::ArchivedBlockType;
 use ferrules_core::debug_info::ArchivedDebugPage;
 use ferrules_core::entities::{ArchivedElementType, ArchivedSegment};
@@ -27,6 +30,7 @@ pub struct PagePainter<'a> {
     pub show_elements: bool,
     pub show_blocks: bool,
     pub show_paths: bool,
+    pub show_tables: bool,
 
     // Selection
     pub selected_item: Option<InspectorItem>,
@@ -328,6 +332,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         block,
                         element,
                         layout,
+                        cell,
                     } = selection
                     {
                         // Choose a primary bbox for highlight and label (priority to Element -> Block -> Layout)
@@ -407,6 +412,107 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                                 });
                             }
                         }
+
+                        if let Some(c) = cell {
+                            let rect = self.to_rect(
+                                c.bbox[0],
+                                c.bbox[1],
+                                c.bbox[2],
+                                c.bbox[3],
+                                final_scale,
+                                total_offset_x,
+                                total_offset_y,
+                            );
+
+                            frame.stroke(
+                                &Path::rectangle(rect.position(), rect.size()),
+                                Stroke::default()
+                                    .with_color(crate::theme::TABLE_SELECTION)
+                                    .with_width(2.0),
+                            );
+                        }
+                    }
+                }
+
+                if self.show_tables {
+                    for block in self.page.blocks.as_slice() {
+                        if let ArchivedBlockType::Table(table) = &block.kind {
+                            // Draw table background/overlay
+                            let table_rect = self.to_rect(
+                                block.bbox.x0,
+                                block.bbox.y0,
+                                block.bbox.x1,
+                                block.bbox.y1,
+                                final_scale,
+                                total_offset_x,
+                                total_offset_y,
+                            );
+
+                            // Draw cells
+                            for row in table.rows.as_slice() {
+                                for cell in row.cells.as_slice() {
+                                    let cell_rect = self.to_rect(
+                                        cell.bbox.x0,
+                                        cell.bbox.y0,
+                                        cell.bbox.x1,
+                                        cell.bbox.y1,
+                                        final_scale,
+                                        total_offset_x,
+                                        total_offset_y,
+                                    );
+
+                                    frame.fill(
+                                        &Path::rectangle(cell_rect.position(), cell_rect.size()),
+                                        Color {
+                                            a: 0.1,
+                                            ..crate::theme::PEACH
+                                        },
+                                    );
+
+                                    frame.stroke(
+                                        &Path::rectangle(cell_rect.position(), cell_rect.size()),
+                                        Stroke::default()
+                                            .with_color(Color {
+                                                a: 0.3,
+                                                ..crate::theme::PEACH
+                                            })
+                                            .with_width(0.5),
+                                    );
+                                }
+                            }
+
+                            // Algorithm hint label
+                            let algo_text = match table.algorithm {
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Lattice => "Lattice",
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Stream => "Stream",
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Vision => "Vision",
+                                _ => "Unknown",
+                            };
+                            let algo_color = match table.algorithm {
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Lattice => {
+                                    crate::theme::GREEN
+                                }
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Stream => {
+                                    crate::theme::BLUE
+                                }
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Vision => {
+                                    crate::theme::MAUVE
+                                }
+                                _ => crate::theme::OVERLAY0,
+                            };
+
+                            frame.fill_text(Text {
+                                content: algo_text.to_string(),
+                                position: Point::new(table_rect.x, table_rect.y - 12.0),
+                                color: algo_color,
+                                size: 10.0.into(),
+                                font: Font {
+                                    weight: iced::font::Weight::Bold,
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             }
@@ -456,9 +562,16 @@ impl<'a> PagePainter<'a> {
         let mut hovered_block = None;
         let mut hovered_element = None;
         let mut hovered_layout = None;
+        let mut hovered_cell = None;
 
-        if self.show_blocks {
+        if self.show_blocks || self.show_tables {
             for block in self.page.blocks.as_slice() {
+                let is_table = matches!(block.kind, ArchivedBlockType::Table(_));
+
+                if !self.show_blocks && !is_table {
+                    continue;
+                }
+
                 if px >= block.bbox.x0
                     && px <= block.bbox.x1
                     && py >= block.bbox.y0
@@ -481,20 +594,80 @@ impl<'a> PagePainter<'a> {
                         ArchivedBlockType::Image(_) => "Image",
                         ArchivedBlockType::Table(_) => "Table",
                     };
+
+                    let mut table_details = None;
+
+                    if let ArchivedBlockType::Table(table) = &block.kind {
+                        table_details = Some(InspectorTableDetails {
+                            algorithm: match table.algorithm {
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Lattice => {
+                                    "Lattice".to_string()
+                                }
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Stream => {
+                                    "Stream".to_string()
+                                }
+                                ferrules_core::blocks::ArchivedTableAlgorithm::Vision => {
+                                    "Vision".to_string()
+                                }
+                                _ => "Unknown".to_string(),
+                            },
+                            rows: table.rows.len(),
+                            cols: if table.rows.is_empty() {
+                                0
+                            } else {
+                                table.rows[0].cells.len()
+                            },
+                        });
+
+                        // Check for cell hover
+                        for (r_idx, row) in table.rows.iter().enumerate() {
+                            for (c_idx, cell) in row.cells.iter().enumerate() {
+                                if px >= cell.bbox.x0
+                                    && px <= cell.bbox.x1
+                                    && py >= cell.bbox.y0
+                                    && py <= cell.bbox.y1
+                                {
+                                    hovered_cell = Some(InspectorCell {
+                                        row_idx: r_idx,
+                                        col_idx: c_idx,
+                                        row_span: cell.row_span,
+                                        col_span: cell.col_span,
+                                        text: cell.text.to_string(),
+                                        bbox: [
+                                            cell.bbox.x0,
+                                            cell.bbox.y0,
+                                            cell.bbox.x1,
+                                            cell.bbox.y1,
+                                        ],
+                                    });
+                                    break;
+                                }
+                            }
+                            if hovered_cell.is_some() {
+                                break;
+                            }
+                        }
+                    }
+
                     hovered_block = Some(InspectorBlock {
                         id: block.id as usize,
                         kind: block_kind.to_string(),
                         bbox: [block.bbox.x0, block.bbox.y0, block.bbox.x1, block.bbox.y1],
                         pages: block.pages_id.iter().map(|&id| id as usize).collect(),
                         text: block_text,
+                        table_details,
                     });
-                    break;
                 }
             }
         }
 
-        if self.show_elements {
+        if self.show_elements || self.show_tables {
             for element in self.page.elements.as_slice() {
+                let is_table = matches!(element.kind, ArchivedElementType::Table(_));
+                if !self.show_elements && !is_table {
+                    continue;
+                }
+
                 if px >= element.bbox.x0
                     && px <= element.bbox.x1
                     && py >= element.bbox.y0
@@ -549,6 +722,7 @@ impl<'a> PagePainter<'a> {
                 block: hovered_block,
                 element: hovered_element,
                 layout: hovered_layout,
+                cell: hovered_cell,
             })
         } else {
             None

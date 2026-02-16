@@ -1,4 +1,4 @@
-use iced::{font::Weight, Color, Font};
+use iced::{Color, Font, font::Weight};
 
 // --- PALETTE: Catppuccin Mocha ---
 pub const BASE: Color = Color::from_rgb(0.117, 0.117, 0.180); // #1e1e2e
@@ -17,6 +17,7 @@ pub const PEACH: Color = Color::from_rgb(0.980, 0.702, 0.522); // #fab387
 pub const MAUVE: Color = Color::from_rgb(0.796, 0.651, 0.969); // #cba6f7
 pub const LAVENDER: Color = Color::from_rgb(0.706, 0.745, 0.996); // #b4befe
 pub const YELLOW: Color = Color::from_rgb(0.976, 0.890, 0.686); // #f9e2af
+pub const ORANGE: Color = Color::from_rgb(0.980, 0.545, 0.447); // #fa8b72
 
 pub const SELECTION_BG: Color = Color {
     r: 0.976,
@@ -25,6 +26,7 @@ pub const SELECTION_BG: Color = Color {
     a: 0.2,
 }; // Yellow with alpha
 pub const SELECTION_BORDER: Color = YELLOW;
+pub const TABLE_SELECTION: Color = ORANGE;
 
 // --- TYPOGRAPHY ---
 pub const FONT_BOLD: Font = Font {
