@@ -6,7 +6,8 @@ model-archive/
 *.pt
 test_data/*
 
-models/
+models/*
+!models/table-transformer-structure-recognition_fp16.onnx
 
 **/.env
 **/examples/
