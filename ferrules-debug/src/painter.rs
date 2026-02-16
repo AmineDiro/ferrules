@@ -178,20 +178,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                 frame.draw_image(image_rect, img);
             }
             PainterMode::Overlay => {
-                // Catppuccin Mocha Palette
-                let red = Color::from_rgb(0.95, 0.54, 0.65); // #f38ba8
-                let green = Color::from_rgb(0.65, 0.89, 0.63); // #a6e3a1
-                let mauve = Color::from_rgb(0.79, 0.65, 0.96); // #cba6f7
-                let blue = Color::from_rgb(0.53, 0.70, 0.98); // #89b4fa
-                let peach = Color::from_rgb(0.98, 0.70, 0.52); // #fab387
-                let surface0 = Color::from_rgb(0.19, 0.19, 0.26); // #313244
-                let overlay0_faded = Color {
-                    r: 0.43,
-                    g: 0.45,
-                    b: 0.56,
-                    a: 0.3,
-                }; // #6c7086
-
+                // Catppuccin Mocha Palette (Now using theme.rs)
                 if self.show_paths {
                     for path in self.page.paths.as_slice() {
                         for segment in path.segments.as_slice() {
@@ -208,7 +195,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                                     frame.stroke(
                                         &Path::line(p1, p2),
                                         Stroke::default()
-                                            .with_color(overlay0_faded)
+                                            .with_color(crate::theme::OVERLAY0_FADED.into())
                                             .with_width(0.8),
                                     );
                                 }
@@ -225,7 +212,7 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                                     frame.stroke(
                                         &Path::rectangle(rect.position(), rect.size()),
                                         Stroke::default()
-                                            .with_color(overlay0_faded)
+                                            .with_color(crate::theme::OVERLAY0_FADED.into())
                                             .with_width(0.8),
                                     );
                                 }
@@ -247,7 +234,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(red).with_width(0.8),
+                            Stroke::default()
+                                .with_color(crate::theme::RED)
+                                .with_width(0.8),
                         );
                     }
                 }
@@ -265,7 +254,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(blue).with_width(0.8),
+                            Stroke::default()
+                                .with_color(crate::theme::BLUE)
+                                .with_width(0.8),
                         );
                     }
                 }
@@ -283,7 +274,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(green).with_width(1.2),
+                            Stroke::default()
+                                .with_color(crate::theme::GREEN)
+                                .with_width(1.2),
                         );
                     }
                 }
@@ -301,7 +294,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(peach).with_width(1.5),
+                            Stroke::default()
+                                .with_color(crate::theme::PEACH)
+                                .with_width(1.5),
                         );
                     }
                 }
@@ -319,7 +314,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                         );
                         frame.stroke(
                             &Path::rectangle(rect.position(), rect.size()),
-                            Stroke::default().with_color(mauve).with_width(2.0),
+                            Stroke::default()
+                                .with_color(crate::theme::MAUVE)
+                                .with_width(2.0),
                         );
                     }
                 }
@@ -353,12 +350,12 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
 
                             frame.fill(
                                 &Path::rectangle(rect.position(), rect.size()),
-                                Color::from_rgba(1.0, 0.9, 0.2, 0.2),
+                                crate::theme::SELECTION_BG,
                             );
                             frame.stroke(
                                 &Path::rectangle(rect.position(), rect.size()),
                                 Stroke::default()
-                                    .with_color(Color::from_rgb(1.0, 0.9, 0.2))
+                                    .with_color(crate::theme::SELECTION_BORDER)
                                     .with_width(4.0),
                             );
 
@@ -375,13 +372,13 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
 
                             if !label_text.is_empty() {
                                 let label_bg_color = if element.is_some() {
-                                    peach
+                                    crate::theme::PEACH
                                 } else if block.is_some() {
-                                    mauve
+                                    crate::theme::MAUVE
                                 } else if layout.is_some() {
-                                    green
+                                    crate::theme::GREEN
                                 } else {
-                                    surface0
+                                    crate::theme::SURFACE0
                                 };
 
                                 let label_size = 12.0;

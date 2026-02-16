@@ -1,17 +1,18 @@
 use clap::Parser;
 use ferrules_core::debug_info::DebugDocument;
-use iced::font::Weight;
 use iced::widget::{
     button, canvas, checkbox, column, container, horizontal_space, image, row, slider, text, Space,
     Tooltip,
 };
-use iced::{event, window, Alignment, Color, Element, Event, Font, Length, Task, Theme, Vector};
+use iced::{event, window, Alignment, Color, Element, Event, Length, Task, Theme, Vector};
 use memmap2::Mmap;
 use rkyv::archived_root;
 use std::path::PathBuf;
 
 mod inspector;
 mod painter;
+pub mod theme;
+pub mod widgets;
 use inspector::{view_inspector, InspectorItem, InspectorSection};
 use painter::{CanvasMessage, PagePainter, PainterMode};
 
@@ -33,11 +34,7 @@ pub fn main() -> iced::Result {
 }
 
 // Catppuccin Mocha Palette
-const MOCHA_BASE: Color = Color::from_rgb(0.117, 0.117, 0.180); // #1e1e2e
-const MOCHA_SURFACE0: Color = Color::from_rgb(0.192, 0.196, 0.266); // #313244
-const MOCHA_SURFACE1: Color = Color::from_rgb(0.270, 0.278, 0.352); // #45475a
-const MOCHA_LAVENDER: Color = Color::from_rgb(0.705, 0.745, 0.996); // #b4befe (Accent)
-const MOCHA_TEXT: Color = Color::from_rgb(0.803, 0.839, 0.956); // #cdd6f4
+// Catppuccin Mocha Palette (Moved to theme.rs)
 
 struct FerrulesDebug {
     mmap: Option<Mmap>,
@@ -230,15 +227,6 @@ impl FerrulesDebug {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let bold_font = Font {
-            weight: Weight::Bold,
-            ..Default::default()
-        };
-        let medium_font = Font {
-            weight: Weight::Medium,
-            ..Default::default()
-        };
-
         let logo_path = "/Users/amine/coding/ferrules/imgs/ferrules-logo.png";
 
         if let Some(mmap) = &self.mmap {
@@ -265,70 +253,72 @@ impl FerrulesDebug {
                         .padding(0)
                         .style(button::text),
                         horizontal_space(),
-                        button(text("‹").size(16).font(bold_font))
+                        // Line 268 fix: use theme::FONT_BOLD not bold_font
+                        button(text("‹").size(16).font(theme::FONT_BOLD))
                             .on_press(Message::ToggleSidebar)
                             .padding(5)
                             .style(button::text),
                     ]
                     .align_y(Alignment::Center)
                     .width(Length::Fill),
-                    Space::with_height(10),
+                    widgets::v_space(10.0),
                     text(archived.name.as_str())
-                        .size(13)
-                        .color(MOCHA_TEXT)
-                        .font(medium_font),
-                    Space::with_height(30),
-                    button(text("Open .ferr").size(14).font(medium_font))
-                        .on_press(Message::OpenFile)
-                        .padding(10)
-                        .width(Length::Fill),
-                    Space::with_height(30),
-                    text("LAYERS")
-                        .size(11)
-                        .color(Color::from_rgb(0.5, 0.5, 0.6))
-                        .font(bold_font),
+                        .size(theme::TEXT_SIZE_MD)
+                        .color(theme::TEXT)
+                        .font(theme::FONT_MEDIUM),
+                    widgets::v_space(30.0),
+                    button(
+                        text("Open .ferr")
+                            .size(theme::TEXT_SIZE_LG)
+                            .font(theme::FONT_MEDIUM)
+                    )
+                    .on_press(Message::OpenFile)
+                    .padding(theme::PADDING_MD)
+                    .width(Length::Fill),
+                    widgets::v_space(30.0),
+                    widgets::section_header("LAYERS"),
                     column![
                         self.layer_checkbox(
                             "Native Lines",
                             self.show_native,
                             Layer::Native,
-                            Color::from_rgb(0.95, 0.54, 0.65)
-                        ), // Mocha Red
+                            theme::RED
+                        ),
                         self.layer_checkbox(
                             "Vector Paths",
                             self.show_paths,
                             Layer::Paths,
-                            Color::from_rgba(0.9, 0.9, 0.9, 0.5)
+                            theme::OVERLAY0_FADED
                         ),
                         self.layer_checkbox(
                             "Layout Analysis",
                             self.show_layout,
                             Layer::Layout,
-                            Color::from_rgb(0.65, 0.89, 0.63)
-                        ), // Mocha Green
+                            theme::GREEN
+                        ),
                         self.layer_checkbox(
                             "OCR Text Lines",
                             self.show_ocr,
                             Layer::OCR,
-                            Color::from_rgb(0.53, 0.70, 0.98)
-                        ), // Mocha Blue
+                            theme::BLUE
+                        ),
                         self.layer_checkbox(
                             "Logical Elements",
                             self.show_elements,
                             Layer::Elements,
-                            Color::from_rgb(0.98, 0.70, 0.52)
-                        ), // Mocha Peach
+                            theme::PEACH
+                        ),
                         self.layer_checkbox(
                             "Structural Blocks",
                             self.show_blocks,
                             Layer::Blocks,
-                            Color::from_rgb(0.79, 0.65, 0.96)
-                        ), // Mocha Mauve
+                            theme::MAUVE
+                        ),
                     ]
-                    .spacing(14),
+                    .spacing(theme::SPACING_LG),
                 ]
-                .spacing(10)
-                .padding(20)
+                .spacing(theme::SPACING_MD)
+                .padding(theme::PADDING_LG)
             } else {
                 column![
                     button(
@@ -349,27 +339,18 @@ impl FerrulesDebug {
                         iced::widget::tooltip::Position::Right,
                     ),
                 ]
-                .spacing(20)
-                .padding(10)
+                .spacing(theme::SPACING_XL)
+                .padding(theme::PADDING_MD)
                 .align_x(Alignment::Center)
             };
 
-            let left_sidebar = container(left_sidebar_content)
+            let left_sidebar = widgets::panel_container(left_sidebar_content)
                 .width(if self.sidebar_open {
-                    Length::Fixed(240.0)
+                    Length::Fixed(theme::SIDEBAR_WIDTH_OPEN)
                 } else {
-                    Length::Fixed(60.0)
+                    Length::Fixed(theme::SIDEBAR_WIDTH_CLOSED)
                 })
-                .height(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(MOCHA_SURFACE0.into()),
-                    border: iced::Border {
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                });
+                .height(Length::Fill);
 
             // --- TOP BAR ---
             let top_bar = container(
@@ -378,8 +359,8 @@ impl FerrulesDebug {
                     container(
                         row![
                             text(format!("Page {} / {}", current_page_idx + 1, total_pages))
-                                .size(14)
-                                .font(bold_font),
+                                .size(theme::TEXT_SIZE_LG)
+                                .font(theme::FONT_BOLD),
                             slider(
                                 0..=total_pages.saturating_sub(1),
                                 current_page_idx as u32,
@@ -388,14 +369,14 @@ impl FerrulesDebug {
                             .width(Length::Fixed(300.0))
                             .step(1u32),
                         ]
-                        .spacing(15)
+                        .spacing(theme::SPACING_LG)
                         .align_y(Alignment::Center)
                     )
-                    .padding([0, 20])
+                    .padding([0.0, theme::PADDING_LG])
                     .style(move |_| container::Style {
-                        background: Some(MOCHA_SURFACE0.into()),
+                        background: Some(theme::SURFACE0.into()),
                         border: iced::Border {
-                            radius: 20.0.into(),
+                            radius: theme::BORDER_RADIUS_LG.into(),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -403,18 +384,18 @@ impl FerrulesDebug {
                     horizontal_space(),
                     row![
                         text(format!("{:3.0}%", self.zoom * 100.0))
-                            .size(13)
-                            .font(bold_font)
-                            .color(MOCHA_TEXT),
+                            .size(theme::TEXT_SIZE_MD)
+                            .font(theme::FONT_BOLD)
+                            .color(theme::TEXT),
                         slider(0.1..=5.0, self.zoom, Message::ZoomSliderChanged)
                             .step(0.1)
                             .width(Length::Fixed(120.0)),
-                        button(text("Reset").size(12).font(bold_font))
+                        button(text("Reset").size(12).font(theme::FONT_BOLD))
                             .on_press(Message::ResetView)
                             .padding([4, 12])
                             .style(button::secondary),
                     ]
-                    .spacing(15)
+                    .spacing(theme::SPACING_LG)
                     .align_y(Alignment::Center)
                 ]
                 .width(Length::Fill)
@@ -422,18 +403,15 @@ impl FerrulesDebug {
                 .padding(12),
             )
             .style(move |_| container::Style {
-                background: Some(MOCHA_SURFACE1.into()),
+                background: Some(theme::SURFACE1.into()),
                 ..Default::default()
             });
 
             // --- RIGHT SIDEBAR (Inspector) ---
-            let right_sidebar = container(
+            let right_sidebar = widgets::panel_container(
                 column![
-                    text("INSPECTOR")
-                        .size(11)
-                        .color(Color::from_rgb(0.5, 0.5, 0.6))
-                        .font(bold_font),
-                    Space::with_height(10),
+                    widgets::section_header("INSPECTOR"),
+                    widgets::v_space(10.0),
                     view_inspector(
                         self.selected_info.as_ref().unwrap_or(&self.hovered_info),
                         self.inspector_block_open,
@@ -444,14 +422,10 @@ impl FerrulesDebug {
                         Message::ToggleInspectorSection(InspectorSection::Layout),
                     )
                 ]
-                .padding(10),
+                .padding(theme::PADDING_MD),
             )
-            .width(Length::Fixed(320.0))
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(MOCHA_SURFACE0.into()),
-                ..Default::default()
-            });
+            .width(Length::Fixed(theme::INSPECTOR_WIDTH))
+            .height(Length::Fill);
 
             // --- MAIN CANVAS ---
             let image_painter = PagePainter {
@@ -501,7 +475,7 @@ impl FerrulesDebug {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(MOCHA_BASE.into()),
+                background: Some(theme::BASE.into()),
                 ..Default::default()
             });
 
@@ -519,21 +493,25 @@ impl FerrulesDebug {
                         .width(Length::Fixed(120.0))
                         .height(Length::Fixed(120.0)),
                     text("DOCUMENT ANALYSIS TOOLKIT")
-                        .size(18)
-                        .color(MOCHA_LAVENDER)
-                        .font(bold_font),
-                    Space::with_height(40),
-                    button(text("Select .ferr File").size(18).font(bold_font))
-                        .on_press(Message::OpenFile)
-                        .padding([15, 60])
-                        .style(button::primary),
+                        .size(theme::TEXT_SIZE_XL)
+                        .color(theme::LAVENDER)
+                        .font(theme::FONT_BOLD),
+                    widgets::v_space(40.0),
+                    button(
+                        text("Select .ferr File")
+                            .size(theme::TEXT_SIZE_XL)
+                            .font(theme::FONT_BOLD)
+                    )
+                    .on_press(Message::OpenFile)
+                    .padding([15, 60])
+                    .style(button::primary),
                     text("Or drop archive here")
-                        .size(14)
-                        .color(MOCHA_TEXT)
-                        .font(medium_font),
+                        .size(theme::TEXT_SIZE_LG)
+                        .color(theme::TEXT)
+                        .font(theme::FONT_MEDIUM),
                 ]
                 .align_x(Alignment::Center)
-                .spacing(20),
+                .spacing(theme::SPACING_XL),
             )
             .width(Length::Fill)
             .height(Length::Fill)
@@ -550,10 +528,6 @@ impl FerrulesDebug {
         layer: Layer,
         color: Color,
     ) -> Element<'_, Message> {
-        let bold_font = Font {
-            weight: Weight::Bold,
-            ..Default::default()
-        };
         row![
             container(Space::with_width(3))
                 .width(Length::Fixed(3.0))
@@ -569,8 +543,8 @@ impl FerrulesDebug {
             checkbox(label, is_checked)
                 .on_toggle(move |_| Message::ToggleLayer(layer.clone()))
                 .size(14)
-                .text_size(13)
-                .font(bold_font),
+                .text_size(theme::TEXT_SIZE_MD)
+                .font(theme::FONT_BOLD),
         ]
         .spacing(12)
         .align_y(Alignment::Center)
