@@ -399,7 +399,7 @@ impl ORTLayoutParser {
 }
 
 /// runs nms on without taking into account which class
-fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
+pub(crate) fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
     raw_bboxes.sort_by(|r1, r2| r2.proba.partial_cmp(&r1.proba).unwrap());
     let mut current_index = 0;
     for index in 0..raw_bboxes.len() {

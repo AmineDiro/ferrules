@@ -44,7 +44,7 @@
 //!         &doc_bytes,
 //!         "document".into(),
 //!         Default::default(),
-//!         None,          // No progress callback
+//!         None::<fn(usize)>,          // No progress callback
 //!     ).await?;
 //!
 //!     Ok(())

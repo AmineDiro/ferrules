@@ -1,11 +1,12 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use image::DynamicImage;
-use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use pdfium_render::prelude::*;
+
 use tracing::{instrument, Span};
 
 use crate::{
-    entities::{BBox, CharSpan, Line, PageID},
+    entities::{BBox, CharSpan, Line, PDFPath, PageID, Segment},
     error::FerrulesError,
     layout::model::ORTLayoutParser,
 };
@@ -96,6 +97,7 @@ pub struct ParseNativePageResult {
     // TODO: page_native_rotation
     pub page_id: PageID,
     pub text_lines: Vec<Line>,
+    pub paths: Vec<PDFPath>,
     pub page_bbox: BBox,
     pub page_image: Arc<DynamicImage>,
     pub page_image_scale1: DynamicImage,
@@ -142,6 +144,20 @@ pub(crate) fn parse_page_native(
     required_raster_height: u32,
 ) -> anyhow::Result<ParseNativePageResult> {
     let start_time = Instant::now();
+
+    let page_bbox = BBox {
+        x0: 0f32,
+        y0: 0f32,
+        x1: page.width().value,
+        y1: page.height().value,
+    };
+
+    // NOTE: Extract paths BEFORE flatten. `page.flatten()` merges annotations and
+    // form fields into the page content stream, which invalidates pdfium's
+    // internal page‐object list. Calling `page.objects()` after flatten
+    // dereferences stale pointers and segfaults.
+    let paths = extract_page_paths(page, &page_bbox);
+
     if flatten_page {
         page.flatten()?;
     }
@@ -152,12 +168,6 @@ pub(crate) fn parse_page_native(
     };
     let downscale_factor = 1f32 / rescale_factor;
 
-    let page_bbox = BBox {
-        x0: 0f32,
-        y0: 0f32,
-        x1: page.width().value,
-        y1: page.height().value,
-    };
     let page_image = page
         .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
         .map(|bitmap| bitmap.as_image())?;
@@ -179,6 +189,7 @@ pub(crate) fn parse_page_native(
     Ok(ParseNativePageResult {
         page_id,
         text_lines,
+        paths,
         page_bbox,
         page_image: Arc::new(page_image),
         page_image_scale1,
@@ -187,6 +198,60 @@ pub(crate) fn parse_page_native(
             parse_native_duration_ms,
         },
     })
+}
+
+fn extract_page_paths(page: &PdfPage, page_bbox: &BBox) -> Vec<PDFPath> {
+    let mut paths = Vec::new();
+
+    for object in page.objects().iter() {
+        if let Some(path_obj) = object.as_path_object() {
+            let mut segments = Vec::new();
+            let mut current_point: Option<(f32, f32)> = None;
+
+            for segment in path_obj.segments().iter() {
+                match segment.segment_type() {
+                    PdfPathSegmentType::LineTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // NOTE: PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        let converted_point = (x, converted_y);
+
+                        if let Some(start) = current_point {
+                            segments.push(Segment::Line {
+                                start,
+                                end: converted_point,
+                            });
+                            current_point = Some(converted_point);
+                        } else {
+                            current_point = Some(converted_point);
+                        }
+                    }
+                    PdfPathSegmentType::MoveTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        current_point = Some((x, converted_y));
+                    }
+                    _ => {}
+                }
+            }
+
+            if !segments.is_empty() {
+                paths.push(PDFPath {
+                    segments,
+                    is_stroke: path_obj.is_stroked().unwrap_or(false),
+                    is_fill: path_obj
+                        .fill_mode()
+                        .map(|m| m != PdfPathFillMode::None)
+                        .unwrap_or(false),
+                    stroke_width: path_obj.stroke_width().ok().map(|p| p.value),
+                });
+            }
+        }
+    }
+    paths
 }
 
 fn handle_parse_native_req(

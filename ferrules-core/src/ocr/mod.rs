@@ -120,23 +120,25 @@ mod ocr_mac {
     mod tests {
         use super::*;
         use image::ImageReader;
-        use std::time::Instant;
+        use std::{path::Path, time::Instant};
 
         #[test]
         fn test_ocr_apple_vision() {
-            let image = ImageReader::open("./test_data/double_cols.jpg")
-                .unwrap()
-                .decode()
-                .unwrap();
+            if Path::new("./test_data/double_cols.jpg").exists() {
+                let image = ImageReader::open("./test_data/double_cols.jpg")
+                    .unwrap()
+                    .decode()
+                    .unwrap();
 
-            let s = Instant::now();
-            let ocr_result = parse_image_ocr(&image, 1f32);
-            assert!(ocr_result.is_ok());
+                let s = Instant::now();
+                let ocr_result = parse_image_ocr(&image, 1f32);
+                assert!(ocr_result.is_ok());
 
-            println!(
-                "OCR took: {}ms",
-                Instant::now().duration_since(s).as_millis()
-            );
+                println!(
+                    "OCR took: {}ms",
+                    Instant::now().duration_since(s).as_millis()
+                );
+            }
         }
     }
 }

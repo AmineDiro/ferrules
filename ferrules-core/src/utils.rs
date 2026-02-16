@@ -80,7 +80,28 @@ fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> 
                     None => continue,
                 }
             }
-            blocks::BlockType::Table => todo!(),
+            blocks::BlockType::Table(table_block) => {
+                let page_id = block.pages_id.first().unwrap();
+                match doc.pages.iter().find(|&p| p.id == *page_id) {
+                    Some(page) => {
+                        assert!(page.height as u32 > 0);
+                        assert!(page.width as u32 > 0);
+
+                        let x = (block.bbox.x0 - IMAGE_PADDING as f32) as u32;
+                        let y = (block.bbox.y0 - IMAGE_PADDING as f32) as u32;
+                        let width = (block.bbox.width().max(1.0) as u32 + 2 * IMAGE_PADDING)
+                            .min(page.width as u32);
+                        let height = (block.bbox.height().max(1.0) as u32 + 2 * IMAGE_PADDING)
+                            .min(page.height as u32);
+
+                        let crop = page.image.clone().crop(x, y, width, height);
+
+                        let output_file = imgs_dir.join(table_block.path());
+                        crop.save(output_file)?;
+                    }
+                    None => continue,
+                }
+            }
             _ => continue,
         }
     }

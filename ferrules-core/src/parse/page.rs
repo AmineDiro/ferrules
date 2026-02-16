@@ -4,18 +4,20 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use tokio::task::JoinSet;
 
 use image::DynamicImage;
 use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
-    entities::{Element, Line, PageID, StructuredPage},
+    entities::{Element, ElementType, Line, PDFPath, PageID, StructuredPage},
     error::FerrulesError,
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
     ocr::parse_image_ocr,
+    parse::table::ParseTableQueue,
 };
 
 use super::{
@@ -104,11 +106,13 @@ pub async fn parse_page_full(
     parse_native_result: ParseNativePageResult,
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
+    table_queue: ParseTableQueue,
 ) -> Result<StructuredPage, FerrulesError> {
     let span = tracing::Span::current();
     let ParseNativePageResult {
         page_id,
         text_lines,
+        paths,
         page_bbox,
         page_image,
         page_image_scale1,
@@ -143,7 +147,36 @@ pub async fn parse_page_full(
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
 
     // Merging elements with layout
-    let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
+    let mut elements = build_page_elements(&page_layout, &text_lines, page_id)?;
+    let text_lines_arc = Arc::new(text_lines.clone());
+    let paths_arc = Arc::new(paths);
+
+    // Table parsing
+    let mut set = JoinSet::new();
+    for (idx, element) in elements.iter().enumerate() {
+        if matches!(element.kind, ElementType::Table(_)) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let req = crate::parse::table::ParseTableRequest {
+                page_id,
+                page_image: Arc::clone(&page_image),
+                lines: Arc::clone(&text_lines_arc),
+                paths: Arc::clone(&paths_arc),
+                table_bbox: element.bbox.clone(),
+                downscale_factor,
+                metadata: crate::parse::table::TableMetadata { response_tx: tx },
+            };
+            table_queue.push(req).await?;
+            set.spawn(async move { (idx, rx.await) });
+        }
+    }
+
+    while let Some(res) = set.join_next().await {
+        if let Ok((idx, Ok(Ok(resp)))) = res {
+            if let ElementType::Table(ref mut table_opt) = elements[idx].kind {
+                *table_opt = Some(resp.table_block);
+            }
+        }
+    }
     if let Some(tmp_dir) = debug_dir {
         debug_page(
             &tmp_dir,
@@ -153,6 +186,7 @@ pub async fn parse_page_full(
             need_ocr,
             &page_layout,
             &elements,
+            &paths_arc,
         )?
     };
 
@@ -191,6 +225,7 @@ fn debug_page(
     need_ocr: bool,
     page_layout: &[LayoutBBox],
     elements: &[Element],
+    paths: &[PDFPath],
 ) -> Result<(), FerrulesError> {
     let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
     let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
@@ -209,11 +244,22 @@ fn debug_page(
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
     let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
-    let final_img =
+    let final_img_buffer =
         draw_blocks(&blocks, page_image).map_err(|_| FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),
             page_idx,
         })?;
+
+    // Draw paths on final image for debugging
+    let dynamic_final_img = image::DynamicImage::ImageRgba8(final_img_buffer);
+    let final_img_with_paths =
+        crate::draw::draw_paths(paths, &dynamic_final_img).map_err(|_| {
+            FerrulesError::DebugPageError {
+                tmp_dir: tmp_dir.to_path_buf(),
+                page_idx,
+            }
+        })?;
+
     out_img
         .save(output_file)
         .map_err(|_| FerrulesError::DebugPageError {
@@ -221,7 +267,7 @@ fn debug_page(
             page_idx,
         })?;
 
-    final_img
+    final_img_with_paths
         .save(final_output_file)
         .map_err(|_| FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),

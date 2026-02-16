@@ -1109,6 +1109,7 @@ dependencies = [
  "criterion",
  "dirs",
  "futures",
+ "half",
  "html2md",
  "image",
  "imageproc",

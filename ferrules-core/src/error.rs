@@ -23,7 +23,8 @@ pub enum FerrulesError {
     },
     #[error("saving error page number {page_idx} in :{tmp_dir:?}")]
     DebugPageError { tmp_dir: PathBuf, page_idx: PageID },
-
     #[error("saving error page number {page_idx} in :{tmp_dir:?}")]
     ParseTextError { tmp_dir: PathBuf, page_idx: PageID },
+    #[error("table transformer model error: {0}")]
+    TableTransformerModelError(String),
 }
