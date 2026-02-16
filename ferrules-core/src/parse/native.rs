@@ -144,6 +144,20 @@ pub(crate) fn parse_page_native(
     required_raster_height: u32,
 ) -> anyhow::Result<ParseNativePageResult> {
     let start_time = Instant::now();
+
+    let page_bbox = BBox {
+        x0: 0f32,
+        y0: 0f32,
+        x1: page.width().value,
+        y1: page.height().value,
+    };
+
+    // NOTE: Extract paths BEFORE flatten. `page.flatten()` merges annotations and
+    // form fields into the page content stream, which invalidates pdfium's
+    // internal page‐object list. Calling `page.objects()` after flatten
+    // dereferences stale pointers and segfaults.
+    let paths = extract_page_paths(page, &page_bbox);
+
     if flatten_page {
         page.flatten()?;
     }
@@ -154,12 +168,6 @@ pub(crate) fn parse_page_native(
     };
     let downscale_factor = 1f32 / rescale_factor;
 
-    let page_bbox = BBox {
-        x0: 0f32,
-        y0: 0f32,
-        x1: page.width().value,
-        y1: page.height().value,
-    };
     let page_image = page
         .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
         .map(|bitmap| bitmap.as_image())?;
@@ -171,8 +179,6 @@ pub(crate) fn parse_page_native(
     let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
 
     let text_lines = parse_text_lines(text_spans);
-
-    let paths = extract_page_paths(page, &page_bbox);
 
     let parse_native_duration_ms = start_time.elapsed().as_millis();
     tracing::debug!(
