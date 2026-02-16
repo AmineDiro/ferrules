@@ -8,7 +8,7 @@ cargo-dist-version = "0.28.0"
 # CI backends to support
 ci = "github"
 # The preferred Rust toolchain to use in CI (rustup toolchain syntax)
-rust-toolchain-version = "nightly"
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
