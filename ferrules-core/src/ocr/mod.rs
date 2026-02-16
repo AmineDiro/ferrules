@@ -1,4 +1,12 @@
 use image::DynamicImage;
+use lazy_static::lazy_static;
+use tokio::sync::Semaphore;
+
+lazy_static! {
+    /// Global semaphore to limit concurrent OCR tasks.
+    /// This prevents flooding the blocking thread pool and potential ANE/GPU stalls on macOS.
+    pub static ref OCR_SEMAPHORE: Semaphore = Semaphore::new(32);
+}
 
 use crate::entities::{BBox, Line};
 

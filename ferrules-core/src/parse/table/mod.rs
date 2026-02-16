@@ -18,6 +18,8 @@ use lattice::parse_table_lattice;
 use stream::parse_table_stream;
 pub use table_transformer::TableTransformer;
 
+const TABLE_PARSER_CONCURRENCY: usize = 32;
+
 #[derive(Debug)]
 pub struct TableMetadata {
     pub(crate) response_tx: oneshot::Sender<Result<ParseTableResponse, FerrulesError>>,
@@ -70,7 +72,7 @@ async fn start_table_parser(
     mut input_rx: mpsc::Receiver<(ParseTableRequest, Span)>,
 ) {
     // TODO: make this configurable
-    let s = Arc::new(Semaphore::new(8));
+    let s = Arc::new(Semaphore::new(TABLE_PARSER_CONCURRENCY));
     while let Some((req, span)) = input_rx.recv().await {
         let queue_time = req.metadata.queue_time.elapsed().as_millis();
         let page_id = req.page_id;

@@ -64,10 +64,10 @@ fn build_page_elements(
 }
 
 #[instrument(skip_all)]
-fn parse_page_text(
+async fn parse_page_text(
     native_text_lines: Vec<Line>,
     page_layout: &[LayoutBBox],
-    page_image: &DynamicImage,
+    page_image: Arc<DynamicImage>,
     downscale_factor: f32,
 ) -> Result<(Vec<Line>, bool), FerrulesError> {
     let text_layout_box: Vec<&LayoutBBox> =
@@ -75,7 +75,24 @@ fn parse_page_text(
     let need_ocr = page_needs_ocr(&text_layout_box, &native_text_lines);
 
     let ocr_result = if need_ocr {
-        parse_image_ocr(page_image, downscale_factor).ok()
+        let page_image_clone = Arc::clone(&page_image);
+        let start_wait = Instant::now();
+        let _permit = crate::ocr::OCR_SEMAPHORE.acquire().await.unwrap();
+        let wait_duration = start_wait.elapsed();
+
+        let start_ocr = Instant::now();
+        let res = tokio::task::spawn_blocking(move || {
+            parse_image_ocr(&page_image_clone, downscale_factor).ok()
+        })
+        .await
+        .unwrap_or(None);
+        let ocr_duration = start_ocr.elapsed();
+        tracing::debug!(
+            "OCR semaphore wait: {}ms, OCR execution: {}ms",
+            wait_duration.as_millis(),
+            ocr_duration.as_millis()
+        );
+        res
     } else {
         None
     };
@@ -147,8 +164,13 @@ pub async fn parse_page_full(
         .map_err(|_| FerrulesError::LayoutParsingError)?;
 
     let native_lines_captured = text_lines.clone();
-    let (text_lines_processed, need_ocr) =
-        parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
+    let (text_lines_processed, need_ocr) = parse_page_text(
+        text_lines,
+        &page_layout,
+        Arc::clone(&page_image),
+        downscale_factor,
+    )
+    .await?;
 
     // Merging elements with layout
     let mut elements = build_page_elements(&page_layout, &text_lines_processed, page_id)?;

@@ -41,7 +41,9 @@ struct BatchInferenceRunner {
 }
 
 impl BatchInferenceRunner {
-    const MAX_BATCH_SIZE: usize = 32;
+    /// maximum batch size for the table transformer to process
+    const MAX_BATCH_SIZE: usize = 8;
+    /// maximum time to wait for a batch to be filled
     const BATCH_TIMEOUT: Duration = Duration::from_millis(10);
 
     fn new(session: Session, rx: mpsc::Receiver<InferenceRequest>) -> Self {
