@@ -135,7 +135,7 @@ impl BBox {
     Debug, Clone, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct ElementText {
-    pub(crate) text: String,
+    pub text: String,
 }
 
 impl ElementText {
