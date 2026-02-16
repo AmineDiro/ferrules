@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules-api"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -1873,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules-debug"
-version = "0.1.0"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",
