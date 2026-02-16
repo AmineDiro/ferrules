@@ -763,24 +763,71 @@ impl TableParser {
             last_row.bbox.y1 = h as f32;
         }
 
+        // Extract spanning cells and column headers
+        let spanning_cells: Vec<&LayoutBBox> = detections
+            .iter()
+            .filter(|d| d.label == "spanning_cell")
+            .collect();
+        let header_dets: Vec<&LayoutBBox> = detections
+            .iter()
+            .filter(|d| d.label == "column_header")
+            .collect();
+
         let mut table_rows = Vec::new();
-        for row_det in rows {
+        for row_det in &rows {
+            let row_y0_pdf = (row_det.bbox.y0 + y0 as f32) * downscale_factor;
+            let row_y1_pdf = (row_det.bbox.y1 + y0 as f32) * downscale_factor;
+
+            // Check if this row is a header row
+            let is_header = header_dets.iter().any(|hdr| {
+                let row_bbox_crop = &row_det.bbox;
+                row_bbox_crop.intersection(&hdr.bbox) / row_bbox_crop.area() > 0.5
+            });
+
             let mut cells = Vec::new();
-            for col_det in &cols {
-                let col_x0_pdf = (col_det.bbox.x0 + x0 as f32) * downscale_factor;
-                let col_x1_pdf = (col_det.bbox.x1 + x0 as f32) * downscale_factor;
-                let row_y0_pdf = (row_det.bbox.y0 + y0 as f32) * downscale_factor;
-                let row_y1_pdf = (row_det.bbox.y1 + y0 as f32) * downscale_factor;
+            let mut col_idx = 0;
+            while col_idx < cols.len() {
+                // Build the cell bbox for current (row, col) in crop-pixel space
+                let cell_crop = BBox {
+                    x0: cols[col_idx].bbox.x0,
+                    y0: row_det.bbox.y0,
+                    x1: cols[col_idx].bbox.x1,
+                    y1: row_det.bbox.y1,
+                };
+
+                // Check if a spanning cell covers this position
+                let spanning = spanning_cells
+                    .iter()
+                    .find(|sc| cell_crop.intersection(&sc.bbox) / cell_crop.area() > 0.5);
+
+                let col_span = if let Some(sc) = spanning {
+                    // Count how many consecutive columns this spanning cell covers
+                    let mut span = 1;
+                    for j in (col_idx + 1)..cols.len() {
+                        let col_overlap = cols[j].bbox.overlap_x(&sc.bbox);
+                        if col_overlap / cols[j].bbox.width() > 0.5 {
+                            span += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    span
+                } else {
+                    1usize
+                };
+
+                // Build the merged cell bbox spanning col_idx..col_idx+col_span
+                let last_col = &cols[(col_idx + col_span - 1).min(cols.len() - 1)];
+                let cell_x0_pdf = (cols[col_idx].bbox.x0 + x0 as f32) * downscale_factor;
+                let cell_x1_pdf = (last_col.bbox.x1 + x0 as f32) * downscale_factor;
 
                 let cell_bbox = BBox {
-                    x0: col_x0_pdf.max(table_bbox.x0),
+                    x0: cell_x0_pdf.max(table_bbox.x0),
                     y0: row_y0_pdf.max(table_bbox.y0),
-                    x1: col_x1_pdf.min(table_bbox.x1),
+                    x1: cell_x1_pdf.min(table_bbox.x1),
                     y1: row_y1_pdf.min(table_bbox.y1),
                 };
 
-                // Filter lines that fall into this cell
-                // Use intersection to be more robust to slight model inaccuracies
                 let cell_text = lines
                     .iter()
                     .filter(|l| cell_bbox.intersection(&l.bbox) / l.bbox.area() > 0.5)
@@ -791,20 +838,23 @@ impl TableParser {
                 cells.push(crate::blocks::TableCell {
                     text: cell_text,
                     bbox: cell_bbox,
-                    col_span: 1,
+                    col_span: col_span as u8,
                     row_span: 1,
                     content: Vec::new(),
                 });
+
+                col_idx += col_span;
             }
+
             table_rows.push(crate::blocks::TableRow {
                 cells,
                 bbox: BBox {
                     x0: table_bbox.x0,
-                    y0: (row_det.bbox.y0 + y0 as f32) * downscale_factor,
+                    y0: row_y0_pdf,
                     x1: table_bbox.x1,
-                    y1: (row_det.bbox.y1 + y0 as f32) * downscale_factor,
+                    y1: row_y1_pdf,
                 },
-                is_header: false,
+                is_header,
             });
         }
 

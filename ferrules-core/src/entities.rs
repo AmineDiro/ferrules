@@ -74,7 +74,7 @@ impl BBox {
         self.y1 = self.y1.max(other.y1);
     }
     #[inline(always)]
-    fn overlap_x(&self, other: &Self) -> f32 {
+    pub fn overlap_x(&self, other: &Self) -> f32 {
         f32::max(
             0f32,
             f32::min(self.x1, other.x1) - f32::max(self.x0, other.x0),
