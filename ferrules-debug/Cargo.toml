@@ -1,0 +1,23 @@
+[package]
+name = "ferrules-debug"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13.1", features = [
+    "image",
+    "tokio",
+    "canvas",
+    "advanced",
+] }
+ferrules-core = { path = "../ferrules-core" }
+rkyv = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+image = "0.25.5"
+memmap2 = "0.9.5"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+rfd = "0.15"
+iced_core = "0.14.0"

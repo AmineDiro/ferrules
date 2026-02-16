@@ -9,6 +9,7 @@ use ort::{
     },
     session::{builder::GraphOptimizationLevel, Session},
 };
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 use crate::entities::BBox;
 
@@ -81,11 +82,12 @@ lazy_static! {
     ];
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct LayoutBBox {
     pub id: i32,
     pub bbox: BBox,
-    pub label: &'static str,
+    pub label: String,
     pub proba: f32,
 }
 
@@ -324,7 +326,7 @@ impl ORTLayoutParser {
                     y1: y1 * rescale_factor,
                 },
                 proba,
-                label,
+                label: label.to_string(),
             });
             bbox_id += 1;
         }
@@ -438,7 +440,7 @@ mod tests {
                     x1: 3.0,
                     y1: 3.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.85,
             },
             LayoutBBox {
@@ -450,7 +452,7 @@ mod tests {
                     x1: 2.0,
                     y1: 2.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.95,
             },
         ];
@@ -473,7 +475,7 @@ mod tests {
                     x1: 1.0,
                     y1: 1.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.9,
             },
             LayoutBBox {
@@ -484,7 +486,7 @@ mod tests {
                     x1: 3.0,
                     y1: 3.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.95,
             },
             LayoutBBox {
@@ -495,7 +497,7 @@ mod tests {
                     x1: 5.0,
                     y1: 5.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.85,
             },
         ];
@@ -517,7 +519,7 @@ mod tests {
                     x1: 2.0,
                     y1: 2.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.85,
             },
             LayoutBBox {
@@ -529,7 +531,7 @@ mod tests {
                     x1: 2.0,
                     y1: 2.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.95,
             },
             LayoutBBox {
@@ -541,7 +543,7 @@ mod tests {
                     x1: 2.0,
                     y1: 2.0,
                 },
-                label: "A",
+                label: "A".to_string(),
                 proba: 0.90,
             },
         ];

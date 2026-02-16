@@ -128,7 +128,7 @@ pub(crate) fn merge_lines_layout(
     let mut footers = Vec::new();
     for (line, layout_block) in line_block_iterator {
         match &layout_block.as_ref() {
-            Some(&line_layout_block) => match line_layout_block.label {
+            Some(&line_layout_block) => match line_layout_block.label.as_str() {
                 "Page-header" => {
                     merge_or_create_elements(&mut headers, line, line_layout_block, page_id);
                 }

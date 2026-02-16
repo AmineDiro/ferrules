@@ -330,7 +330,7 @@ impl TableTransformer {
                     y1: (cy + h / 2.0).max(0.0).min(orig_height as f32),
                 },
 
-                label: Self::TABLE_LABELS[max_idx],
+                label: Self::TABLE_LABELS[max_idx].to_string(),
                 proba: max_prob,
             });
         }
@@ -696,7 +696,7 @@ impl TableParser {
                 }
 
                 row_cells.push(crate::blocks::TableCell {
-                    content: vec![],
+                    content_ids: vec![],
                     text: cell_text,
                     row_span: row_span as u8,
                     col_span: col_span as u8,
@@ -891,7 +891,7 @@ impl TableParser {
                     bbox: cell_bbox,
                     col_span: col_span as u8,
                     row_span: 1,
-                    content: Vec::new(),
+                    content_ids: Vec::new(),
                 });
 
                 col_idx += col_span;
@@ -993,7 +993,7 @@ impl TableParser {
                 current_cell_bbox.merge(&line.bbox);
             } else {
                 cells.push(crate::blocks::TableCell {
-                    content: vec![],
+                    content_ids: vec![],
                     text: current_cell_text.trim().to_string(),
                     bbox: current_cell_bbox,
                     col_span: 1,
@@ -1005,7 +1005,7 @@ impl TableParser {
         }
 
         cells.push(crate::blocks::TableCell {
-            content: vec![],
+            content_ids: vec![],
             text: current_cell_text.trim().to_string(),
             bbox: current_cell_bbox,
             col_span: 1,

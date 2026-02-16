@@ -18,6 +18,8 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+rkyv = { workspace = true }
+bytecheck = "0.6.12"
 
 # pdf reader
 imageproc = "0.25.0"

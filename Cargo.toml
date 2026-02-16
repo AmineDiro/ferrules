@@ -1,7 +1,6 @@
 [workspace]
-members = ["ferrules-core", "ferrules-cli", "ferrules-api"]
+members = ["ferrules-core", "ferrules-cli", "ferrules-api", "ferrules-debug"]
 resolver = "2"
-edition = "2021"
 
 [workspace.dependencies]
 tracing = { version = "0.1.41", features = ["attributes"] }
@@ -18,6 +17,7 @@ uuid = { version = "1.11.0", features = ["v4"] }
 memmap2 = "0.9.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 thiserror = "2.0.12"
+rkyv = { version = "0.7.45", features = ["validation"] }
 
 [profile.release]
 strip = "symbols"

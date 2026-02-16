@@ -2,11 +2,14 @@ use crate::{
     entities::{BBox, Element, ElementType, PageID},
     error::FerrulesError,
 };
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 
 pub type TitleLevel = u8;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct ImageBlock {
     pub(crate) id: usize,
     pub(crate) caption: Option<String>,
@@ -18,17 +21,23 @@ impl ImageBlock {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct TextBlock {
-    pub(crate) text: String,
+    pub text: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct List {
-    pub(crate) items: Vec<String>,
+    pub items: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub enum TableAlgorithm {
     #[default]
     Unknown,
@@ -37,7 +46,9 @@ pub enum TableAlgorithm {
     Vision,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct TableBlock {
     pub(crate) id: usize,
     pub(crate) caption: Option<String>,
@@ -52,29 +63,37 @@ impl TableBlock {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
     pub is_header: bool,
     pub bbox: BBox,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct TableCell {
-    pub content: Vec<Block>,
+    /// IDs of blocks contained within this cell.
+    /// This avoids recursion in serializable structures.
+    pub content_ids: Vec<usize>,
     pub text: String,
     pub row_span: u8,
     pub col_span: u8,
     pub bbox: BBox,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct Title {
     pub level: TitleLevel,
     pub text: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 #[serde(tag = "block_type")]
 pub enum BlockType {
     Header(TextBlock),
@@ -92,7 +111,7 @@ impl std::fmt::Display for BlockType {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct Block {
     pub id: usize,
     pub kind: BlockType,
