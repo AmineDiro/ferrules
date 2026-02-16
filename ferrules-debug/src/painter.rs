@@ -27,11 +27,15 @@ pub struct PagePainter<'a> {
     pub show_elements: bool,
     pub show_blocks: bool,
     pub show_paths: bool,
+
+    // Selection
+    pub selected_item: Option<InspectorItem>,
 }
 
 pub struct State {
     pub last_cursor_position: Point,
     pub is_panning: bool,
+    pub start_drag_position: Option<Point>,
     pub hovered_info: Option<InspectorItem>,
 }
 
@@ -40,6 +44,7 @@ impl Default for State {
         Self {
             last_cursor_position: Point::ORIGIN,
             is_panning: false,
+            start_drag_position: None,
             hovered_info: None,
         }
     }
@@ -48,6 +53,7 @@ impl Default for State {
 #[derive(Debug, Clone)]
 pub enum CanvasMessage {
     Hovered(Option<InspectorItem>),
+    Clicked(Option<InspectorItem>),
     ZoomChanged(f32, Point),
     OffsetChanged(Vector),
 }
@@ -86,12 +92,27 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                     if let Some(pos) = cursor_position {
                         state.is_panning = true;
                         state.last_cursor_position = pos;
+                        state.start_drag_position = Some(pos);
                         return (canvas::event::Status::Captured, None);
                     }
                 }
                 mouse::Event::ButtonReleased(mouse::Button::Left) => {
-                    state.is_panning = false;
-                    return (canvas::event::Status::Captured, None);
+                    let mut message = None;
+                    if state.is_panning {
+                        state.is_panning = false;
+                        if let Some(start_pos) = state.start_drag_position {
+                            if let Some(current_pos) = cursor_position {
+                                let dist = start_pos.distance(current_pos);
+                                if dist < 5.0 {
+                                    // It's a click!
+                                    let item = self.get_hover_detailed(current_pos, bounds);
+                                    message = Some(CanvasMessage::Clicked(item));
+                                }
+                            }
+                        }
+                    }
+                    state.start_drag_position = None;
+                    return (canvas::event::Status::Captured, message);
                 }
                 mouse::Event::CursorMoved { .. } => {
                     if let Some(pos) = cursor_position {
@@ -303,7 +324,9 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
                     }
                 }
 
-                if let Some(selection) = &state.hovered_info {
+                let active_selection = self.selected_item.as_ref().or(state.hovered_info.as_ref());
+
+                if let Some(selection) = active_selection {
                     if let InspectorItem::Selection {
                         block,
                         element,
@@ -330,11 +353,13 @@ impl<'a> Program<CanvasMessage> for PagePainter<'a> {
 
                             frame.fill(
                                 &Path::rectangle(rect.position(), rect.size()),
-                                Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                                Color::from_rgba(1.0, 0.9, 0.2, 0.2),
                             );
                             frame.stroke(
                                 &Path::rectangle(rect.position(), rect.size()),
-                                Stroke::default().with_color(Color::WHITE).with_width(2.0),
+                                Stroke::default()
+                                    .with_color(Color::from_rgb(1.0, 0.9, 0.2))
+                                    .with_width(4.0),
                             );
 
                             // Label etiquette

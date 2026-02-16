@@ -53,6 +53,7 @@ struct FerrulesDebug {
     show_paths: bool,
 
     hovered_info: InspectorItem,
+    selected_info: Option<InspectorItem>,
     sidebar_open: bool,
 
     // Inspector Fold States
@@ -100,6 +101,7 @@ impl FerrulesDebug {
                 show_blocks: true,
                 show_paths: true,
                 hovered_info: InspectorItem::None,
+                selected_info: None,
                 sidebar_open: true,
                 inspector_block_open: true,
                 inspector_element_open: true,
@@ -154,6 +156,27 @@ impl FerrulesDebug {
             Message::CanvasEvent(ev) => match ev {
                 CanvasMessage::Hovered(info) => {
                     self.hovered_info = info.unwrap_or(InspectorItem::None);
+                    Task::none()
+                }
+                CanvasMessage::Clicked(info) => {
+                    if let Some(clicked_item) = info {
+                        // If we clicked the same thing that is already selected, deselect it.
+                        // Otherwise, select the new thing.
+                        if let Some(current) = &self.selected_info {
+                            // Simple equality check might depend on PartialEq implementation of InspectorItem
+                            // which we derived.
+                            if current == &clicked_item {
+                                self.selected_info = None;
+                            } else {
+                                self.selected_info = Some(clicked_item);
+                            }
+                        } else {
+                            self.selected_info = Some(clicked_item);
+                        }
+                    } else {
+                        // Clicked on nothing -> deselect
+                        self.selected_info = None;
+                    }
                     Task::none()
                 }
                 CanvasMessage::ZoomChanged(factor, pos) => {
@@ -412,7 +435,7 @@ impl FerrulesDebug {
                         .font(bold_font),
                     Space::with_height(10),
                     view_inspector(
-                        &self.hovered_info,
+                        self.selected_info.as_ref().unwrap_or(&self.hovered_info),
                         self.inspector_block_open,
                         self.inspector_element_open,
                         self.inspector_layout_open,
@@ -443,6 +466,7 @@ impl FerrulesDebug {
                 show_elements: self.show_elements,
                 show_blocks: self.show_blocks,
                 show_paths: self.show_paths,
+                selected_item: self.selected_info.clone(),
             };
 
             let overlay_painter = PagePainter {
@@ -457,6 +481,7 @@ impl FerrulesDebug {
                 show_elements: self.show_elements,
                 show_blocks: self.show_blocks,
                 show_paths: self.show_paths,
+                selected_item: self.selected_info.clone(),
             };
 
             let canvas_view = container(iced::widget::stack(vec![
