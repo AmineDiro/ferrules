@@ -1,10 +1,9 @@
 use clap::Parser;
 use ferrules_core::debug_info::DebugDocument;
 use iced::font::Weight;
-use iced::widget::text::LineHeight;
 use iced::widget::{
-    button, canvas, checkbox, column, container, horizontal_space, image, row, scrollable, slider,
-    text, vertical_space, Space, Tooltip,
+    button, canvas, checkbox, column, container, horizontal_space, image, row, slider, text, Space,
+    Tooltip,
 };
 use iced::{event, window, Alignment, Color, Element, Event, Font, Length, Task, Theme, Vector};
 use memmap2::Mmap;
@@ -13,7 +12,7 @@ use std::path::PathBuf;
 
 mod inspector;
 mod painter;
-use inspector::{view_inspector, InspectorItem};
+use inspector::{view_inspector, InspectorItem, InspectorSection};
 use painter::{CanvasMessage, PagePainter, PainterMode};
 
 #[derive(Parser, Debug)]
@@ -28,20 +27,21 @@ pub fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
     iced::application("Ferrules Debug", FerrulesDebug::update, FerrulesDebug::view)
-        .theme(|_| Theme::Dracula)
+        .theme(|_| Theme::CatppuccinMocha)
         .subscription(FerrulesDebug::subscription)
         .run_with(move || FerrulesDebug::new(args.file))
 }
 
-const SIDEBAR_COLOR: Color = Color::from_rgb(0.15, 0.16, 0.21); // #282a36 (Dracula Background)
-const TOPBAR_COLOR: Color = Color::from_rgb(0.26, 0.28, 0.35); // #44475a (Dracula Current Line)
-const ACCENT_COLOR: Color = Color::from_rgb(0.74, 0.57, 0.97); // #bd93f9 (Dracula Purple)
+// Catppuccin Mocha Palette
+const MOCHA_BASE: Color = Color::from_rgb(0.117, 0.117, 0.180); // #1e1e2e
+const MOCHA_SURFACE0: Color = Color::from_rgb(0.192, 0.196, 0.266); // #313244
+const MOCHA_SURFACE1: Color = Color::from_rgb(0.270, 0.278, 0.352); // #45475a
+const MOCHA_LAVENDER: Color = Color::from_rgb(0.705, 0.745, 0.996); // #b4befe (Accent)
+const MOCHA_TEXT: Color = Color::from_rgb(0.803, 0.839, 0.956); // #cdd6f4
 
 struct FerrulesDebug {
     mmap: Option<Mmap>,
     current_page_idx: usize,
-    cached_page_image_handle: Option<image::Handle>,
-    last_page_idx_cached: Option<usize>,
 
     zoom: f32,
     offset: Vector,
@@ -54,6 +54,11 @@ struct FerrulesDebug {
 
     hovered_info: InspectorItem,
     sidebar_open: bool,
+
+    // Inspector Fold States
+    inspector_block_open: bool,
+    inspector_element_open: bool,
+    inspector_layout_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +72,7 @@ enum Message {
     ZoomSliderChanged(f32),
     ResetView,
     ToggleSidebar,
+    ToggleInspectorSection(InspectorSection),
 }
 
 #[derive(Debug, Clone)]
@@ -85,8 +91,6 @@ impl FerrulesDebug {
             Self {
                 mmap: None,
                 current_page_idx: 0,
-                cached_page_image_handle: None,
-                last_page_idx_cached: None,
                 zoom: 1.0,
                 offset: Vector::new(0.0, 0.0),
                 show_native: true,
@@ -97,6 +101,9 @@ impl FerrulesDebug {
                 show_paths: true,
                 hovered_info: InspectorItem::None,
                 sidebar_open: true,
+                inspector_block_open: true,
+                inspector_element_open: true,
+                inspector_layout_open: false,
             },
             if let Some(path) = file_path {
                 Task::done(Message::FileSelected(Some(path)))
@@ -175,6 +182,20 @@ impl FerrulesDebug {
                 self.sidebar_open = !self.sidebar_open;
                 Task::none()
             }
+            Message::ToggleInspectorSection(section) => {
+                match section {
+                    InspectorSection::Block => {
+                        self.inspector_block_open = !self.inspector_block_open
+                    }
+                    InspectorSection::Element => {
+                        self.inspector_element_open = !self.inspector_element_open
+                    }
+                    InspectorSection::Layout => {
+                        self.inspector_layout_open = !self.inspector_layout_open
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
@@ -195,6 +216,8 @@ impl FerrulesDebug {
             ..Default::default()
         };
 
+        let logo_path = "/Users/amine/coding/ferrules/imgs/ferrules-logo.png";
+
         if let Some(mmap) = &self.mmap {
             let archived = unsafe { archived_root::<DebugDocument>(&mmap[..]) };
             let current_page_idx = self
@@ -210,10 +233,14 @@ impl FerrulesDebug {
             let left_sidebar_content = if self.sidebar_open {
                 column![
                     row![
-                        text("FERRULES")
-                            .size(20)
-                            .font(bold_font)
-                            .color(ACCENT_COLOR),
+                        button(
+                            image(logo_path)
+                                .width(Length::Fixed(32.0))
+                                .height(Length::Fixed(32.0))
+                        )
+                        .on_press(Message::ToggleSidebar)
+                        .padding(0)
+                        .style(button::text),
                         horizontal_space(),
                         button(text("‹").size(16).font(bold_font))
                             .on_press(Message::ToggleSidebar)
@@ -225,10 +252,10 @@ impl FerrulesDebug {
                     Space::with_height(10),
                     text(archived.name.as_str())
                         .size(13)
-                        .color(Color::from_rgb(0.6, 0.6, 0.7))
+                        .color(MOCHA_TEXT)
                         .font(medium_font),
                     Space::with_height(30),
-                    button(text("Open Archive").size(14).font(medium_font))
+                    button(text("Open .ferr").size(14).font(medium_font))
                         .on_press(Message::OpenFile)
                         .padding(10)
                         .width(Length::Fill),
@@ -242,8 +269,8 @@ impl FerrulesDebug {
                             "Native Lines",
                             self.show_native,
                             Layer::Native,
-                            Color::from_rgb(1.0, 0.33, 0.33)
-                        ),
+                            Color::from_rgb(0.95, 0.54, 0.65)
+                        ), // Mocha Red
                         self.layer_checkbox(
                             "Vector Paths",
                             self.show_paths,
@@ -254,26 +281,26 @@ impl FerrulesDebug {
                             "Layout Analysis",
                             self.show_layout,
                             Layer::Layout,
-                            Color::from_rgb(0.31, 1.0, 0.44)
-                        ),
+                            Color::from_rgb(0.65, 0.89, 0.63)
+                        ), // Mocha Green
                         self.layer_checkbox(
                             "OCR Text Lines",
                             self.show_ocr,
                             Layer::OCR,
-                            Color::from_rgb(0.54, 0.88, 1.0)
-                        ),
+                            Color::from_rgb(0.53, 0.70, 0.98)
+                        ), // Mocha Blue
                         self.layer_checkbox(
                             "Logical Elements",
                             self.show_elements,
                             Layer::Elements,
-                            Color::from_rgb(1.0, 0.72, 0.42)
-                        ),
+                            Color::from_rgb(0.98, 0.70, 0.52)
+                        ), // Mocha Peach
                         self.layer_checkbox(
                             "Structural Blocks",
                             self.show_blocks,
                             Layer::Blocks,
-                            Color::from_rgb(0.74, 0.57, 0.97)
-                        ),
+                            Color::from_rgb(0.79, 0.65, 0.96)
+                        ), // Mocha Mauve
                     ]
                     .spacing(14),
                 ]
@@ -281,10 +308,14 @@ impl FerrulesDebug {
                 .padding(20)
             } else {
                 column![
-                    button(text("›").size(16).font(bold_font))
-                        .on_press(Message::ToggleSidebar)
-                        .padding(5)
-                        .style(button::text),
+                    button(
+                        image(logo_path)
+                            .width(Length::Fixed(32.0))
+                            .height(Length::Fixed(32.0))
+                    )
+                    .on_press(Message::ToggleSidebar)
+                    .padding(0)
+                    .style(button::text),
                     Space::with_height(30),
                     Tooltip::new(
                         button(text("📂").size(18))
@@ -308,7 +339,7 @@ impl FerrulesDebug {
                 })
                 .height(Length::Fill)
                 .style(move |_| container::Style {
-                    background: Some(SIDEBAR_COLOR.into()),
+                    background: Some(MOCHA_SURFACE0.into()),
                     border: iced::Border {
                         width: 0.0,
                         color: Color::TRANSPARENT,
@@ -317,36 +348,29 @@ impl FerrulesDebug {
                     ..Default::default()
                 });
 
-            // --- TOP BAR (Modern Compact Nav) ---
+            // --- TOP BAR ---
             let top_bar = container(
                 row![
                     horizontal_space(),
                     container(
                         row![
-                            button(text("←").size(14).font(bold_font))
-                                .on_press(Message::PageChanged(
-                                    current_page_idx.saturating_sub(1) as u32
-                                ))
-                                .padding(6)
-                                .style(button::text),
-                            text(format!("{}  /  {}", current_page_idx + 1, total_pages))
+                            text(format!("Page {} / {}", current_page_idx + 1, total_pages))
                                 .size(14)
                                 .font(bold_font),
-                            button(text("→").size(14).font(bold_font))
-                                .on_press(Message::PageChanged(
-                                    (current_page_idx + 1)
-                                        .min(total_pages.saturating_sub(1) as usize)
-                                        as u32
-                                ))
-                                .padding(6)
-                                .style(button::text),
+                            slider(
+                                0..=total_pages.saturating_sub(1),
+                                current_page_idx as u32,
+                                Message::PageChanged,
+                            )
+                            .width(Length::Fixed(300.0))
+                            .step(1u32),
                         ]
                         .spacing(15)
                         .align_y(Alignment::Center)
                     )
                     .padding([0, 20])
                     .style(move |_| container::Style {
-                        background: Some(SIDEBAR_COLOR.into()),
+                        background: Some(MOCHA_SURFACE0.into()),
                         border: iced::Border {
                             radius: 20.0.into(),
                             ..Default::default()
@@ -358,7 +382,7 @@ impl FerrulesDebug {
                         text(format!("{:3.0}%", self.zoom * 100.0))
                             .size(13)
                             .font(bold_font)
-                            .color(Color::from_rgb(0.6, 0.6, 0.7)),
+                            .color(MOCHA_TEXT),
                         slider(0.1..=5.0, self.zoom, Message::ZoomSliderChanged)
                             .step(0.1)
                             .width(Length::Fixed(120.0)),
@@ -375,7 +399,7 @@ impl FerrulesDebug {
                 .padding(12),
             )
             .style(move |_| container::Style {
-                background: Some(TOPBAR_COLOR.into()),
+                background: Some(MOCHA_SURFACE1.into()),
                 ..Default::default()
             });
 
@@ -387,14 +411,22 @@ impl FerrulesDebug {
                         .color(Color::from_rgb(0.5, 0.5, 0.6))
                         .font(bold_font),
                     Space::with_height(10),
-                    view_inspector(&self.hovered_info)
+                    view_inspector(
+                        &self.hovered_info,
+                        self.inspector_block_open,
+                        self.inspector_element_open,
+                        self.inspector_layout_open,
+                        Message::ToggleInspectorSection(InspectorSection::Block),
+                        Message::ToggleInspectorSection(InspectorSection::Element),
+                        Message::ToggleInspectorSection(InspectorSection::Layout),
+                    )
                 ]
-                .padding(20),
+                .padding(10),
             )
             .width(Length::Fixed(320.0))
             .height(Length::Fill)
             .style(move |_| container::Style {
-                background: Some(SIDEBAR_COLOR.into()),
+                background: Some(MOCHA_SURFACE0.into()),
                 ..Default::default()
             });
 
@@ -444,7 +476,7 @@ impl FerrulesDebug {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(Color::from_rgb(0.05, 0.05, 0.07).into()),
+                background: Some(MOCHA_BASE.into()),
                 ..Default::default()
             });
 
@@ -456,19 +488,14 @@ impl FerrulesDebug {
             ]
             .into()
         } else {
-            let extra_bold_font = Font {
-                weight: Weight::ExtraBold,
-                ..Default::default()
-            };
             container(
                 column![
-                    text("FERRULES")
-                        .size(80)
-                        .font(extra_bold_font)
-                        .color(ACCENT_COLOR),
+                    image(logo_path)
+                        .width(Length::Fixed(120.0))
+                        .height(Length::Fixed(120.0)),
                     text("DOCUMENT ANALYSIS TOOLKIT")
                         .size(18)
-                        .color(Color::from_rgb(0.5, 0.5, 0.6))
+                        .color(MOCHA_LAVENDER)
                         .font(bold_font),
                     Space::with_height(40),
                     button(text("Select .ferr File").size(18).font(bold_font))
@@ -477,7 +504,7 @@ impl FerrulesDebug {
                         .style(button::primary),
                     text("Or drop archive here")
                         .size(14)
-                        .color(Color::from_rgb(0.4, 0.4, 0.5))
+                        .color(MOCHA_TEXT)
                         .font(medium_font),
                 ]
                 .align_x(Alignment::Center)

@@ -1,214 +1,285 @@
 use iced::font::Weight;
-use iced::widget::{column, container, row, scrollable, text, Rule, Space};
-use iced::{Color, Element, Font, Length, Theme};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::{Alignment, Color, Element, Font, Length};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectorBlock {
+    pub id: usize,
+    pub kind: String,
+    pub bbox: [f32; 4],
+    pub pages: Vec<usize>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectorElement {
+    pub id: usize,
+    pub kind: String,
+    pub bbox: [f32; 4],
+    pub layout_ref: i32,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectorLayout {
+    pub id: i32,
+    pub label: String,
+    pub proba: f32,
+    pub bbox: [f32; 4],
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InspectorItem {
-    Block {
-        id: usize,
-        kind: String,
-        bbox: [f32; 4], // x0, y0, x1, y1
-        pages: Vec<usize>,
-    },
-    Element {
-        id: usize,
-        kind: String,
-        bbox: [f32; 4],
-        layout_ref: i32,
-        text: String,
-    },
-    Layout {
-        id: i32,
-        label: String,
-        proba: f32,
-        bbox: [f32; 4],
+    Selection {
+        block: Option<InspectorBlock>,
+        element: Option<InspectorElement>,
+        layout: Option<InspectorLayout>,
     },
     None,
 }
 
-impl InspectorItem {
-    pub fn title(&self) -> String {
-        match self {
-            InspectorItem::Block { id, .. } => format!("Block #{}", id),
-            InspectorItem::Element { id, .. } => format!("Element #{}", id),
-            InspectorItem::Layout { id, .. } => format!("Layout #{}", id),
-            InspectorItem::None => "No Selection".to_string(),
-        }
-    }
-
-    pub fn bbox(&self) -> Option<[f32; 4]> {
-        match self {
-            InspectorItem::Block { bbox, .. } => Some(*bbox),
-            InspectorItem::Element { bbox, .. } => Some(*bbox),
-            InspectorItem::Layout { bbox, .. } => Some(*bbox),
-            InspectorItem::None => None,
-        }
-    }
-
-    pub fn kind_label(&self) -> String {
-        match self {
-            InspectorItem::Block { kind, .. } => kind.clone(),
-            InspectorItem::Element { kind, .. } => kind.clone(),
-            InspectorItem::Layout { label, .. } => label.clone(),
-            InspectorItem::None => "".to_string(),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorSection {
+    Block,
+    Element,
+    Layout,
 }
 
-pub fn view_inspector<'a, Message>(item: &'a InspectorItem) -> Element<'a, Message>
+pub fn view_inspector<'a, Message>(
+    item: &'a InspectorItem,
+    block_open: bool,
+    element_open: bool,
+    layout_open: bool,
+    on_toggle_block: Message,
+    on_toggle_element: Message,
+    on_toggle_layout: Message,
+) -> Element<'a, Message>
 where
-    Message: 'a + Clone + std::fmt::Debug,
+    Message: 'a + Clone,
 {
-    let content: Element<'a, Message> = match item {
-        InspectorItem::Block {
-            id,
-            kind,
-            bbox,
-            pages,
-        } => column![
-            header("BLOCK", *id, kind.clone()),
-            field("Type", kind.clone()),
-            bbox_field(bbox),
-            field("Pages", format!("{:?}", pages)),
-        ]
-        .into(),
-        InspectorItem::Element {
-            id,
-            kind,
-            bbox,
-            layout_ref,
-            text,
+    match item {
+        InspectorItem::Selection {
+            block,
+            element,
+            layout,
         } => {
-            column![
-                header("ELEMENT", *id, kind.clone()),
-                field("Type", kind.clone()),
-                field("Layout Ref", layout_ref.to_string()),
-                bbox_field(bbox),
-                Space::with_height(10),
-                section_header("Content"),
-                container(
-                    iced::widget::text(text.clone())
-                        .size(13)
-                        .line_height(iced::widget::text::LineHeight::Relative(1.4))
-                )
-                .padding(8) // Apply padding to container widget
-                .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
-                    container::Style {
-                        background: Some(palette.background.weak.color.into()),
-                        border: iced::Border {
-                            color: palette.background.strong.color,
-                            width: 1.0,
-                            radius: 4.0.into(),
-                        },
-                        ..Default::default()
-                    }
-                })
-            ]
-            .into()
-        }
-        InspectorItem::Layout {
-            id,
-            label,
-            proba,
-            bbox,
-        } => column![
-            header("LAYOUT", *id as usize, label.clone()),
-            field("Label", label.clone()),
-            field("Confidence", format!("{:.2}%", proba * 100.0)),
-            bbox_field(bbox),
-        ]
-        .into(),
-        InspectorItem::None => column![text("No Selection")
-            .size(14)
-            .color(Color::from_rgb(0.6, 0.6, 0.6))]
-        .align_x(iced::alignment::Horizontal::Center)
-        .into(),
-    };
+            let mut sections = column![].spacing(10);
 
-    scrollable(container(content).width(Length::Fill).padding(15)).into()
+            if let Some(e) = element {
+                sections = sections.push(render_foldable_section(
+                    "ELEMENT",
+                    &e.kind,
+                    element_open,
+                    || render_element_details(e),
+                    on_toggle_element.clone(),
+                ));
+            }
+
+            if let Some(b) = block {
+                sections = sections.push(render_foldable_section(
+                    "BLOCK",
+                    &b.kind,
+                    block_open,
+                    || render_block_details(b),
+                    on_toggle_block.clone(),
+                ));
+            }
+
+            if let Some(l) = layout {
+                sections = sections.push(render_foldable_section(
+                    "LAYOUT",
+                    &l.label,
+                    layout_open,
+                    || render_layout_details(l),
+                    on_toggle_layout.clone(),
+                ));
+            }
+
+            scrollable(container(sections).width(Length::Fill).padding(10)).into()
+        }
+        InspectorItem::None => container(
+            text("No selection")
+                .size(14)
+                .color(Color::from_rgb(0.5, 0.5, 0.6)),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding(20)
+        .into(),
+    }
 }
 
-fn header<'a, Message>(type_name: &'a str, id: usize, subtitle: String) -> Element<'a, Message>
+fn render_foldable_section<'a, Message>(
+    title: &'a str,
+    subtitle: &'a str,
+    is_open: bool,
+    content_fn: impl Fn() -> Element<'a, Message>,
+    on_toggle: Message,
+) -> Element<'a, Message>
 where
-    Message: 'a + Clone + std::fmt::Debug,
+    Message: 'a + Clone,
 {
-    column![
+    let header = button(
         row![
-            text(type_name)
-                .size(12)
+            text(if is_open { "▼" } else { "▶" })
+                .size(10)
+                .font(Font::MONOSPACE),
+            text(title)
+                .size(11)
                 .font(Font {
                     weight: Weight::Bold,
                     ..Default::default()
                 })
-                .color(Color::from_rgb(0.4, 0.4, 1.0)),
-            text(format!("#{}", id))
-                .size(12)
-                .color(Color::from_rgb(0.6, 0.6, 0.6)),
+                .color(Color::from_rgb(0.7, 0.7, 0.9)),
+            text(subtitle)
+                .size(11)
+                .color(Color::from_rgb(0.5, 0.5, 0.6)),
         ]
-        .spacing(5),
-        text(subtitle).size(20).font(Font {
-            weight: Weight::Semibold,
-            ..Default::default()
-        }),
-        Rule::horizontal(1),
-    ]
-    .spacing(5)
-    .into()
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .on_press(on_toggle)
+    .style(button::text)
+    .padding(5)
+    .width(Length::Fill);
+
+    let mut col = column![header].spacing(5);
+    if is_open {
+        col = col.push(
+            container(content_fn())
+                .padding([5, 15])
+                .style(|_| container::Style {
+                    border: iced::Border {
+                        width: 0.5,
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }),
+        );
+    }
+
+    col.into()
 }
 
-fn field<'a, Message>(key: &'a str, value: String) -> Element<'a, Message>
-where
-    Message: 'a + Clone + std::fmt::Debug,
-{
+fn render_block_details<'a, Message: 'a>(b: &InspectorBlock) -> Element<'a, Message> {
+    let mut col = column![
+        field::<Message>("Type", b.kind.clone()),
+        bbox_field::<Message>(&b.bbox),
+        field::<Message>("Pages", format!("{:?}", b.pages)),
+    ]
+    .spacing(8);
+
+    if !b.text.is_empty() {
+        col = col.push(
+            column![
+                Space::with_height(5),
+                section_header::<Message>("Text Content"),
+                render_text_box::<Message>(&b.text)
+            ]
+            .spacing(5),
+        );
+    }
+
+    col.into()
+}
+
+fn render_element_details<'a, Message: 'a>(e: &InspectorElement) -> Element<'a, Message> {
+    let mut col = column![
+        field::<Message>("Type", e.kind.clone()),
+        field::<Message>("Layout Ref", e.layout_ref.to_string()),
+        bbox_field::<Message>(&e.bbox),
+    ]
+    .spacing(8);
+
+    if !e.text.is_empty() {
+        col = col.push(
+            column![
+                Space::with_height(5),
+                section_header::<Message>("Text Content"),
+                render_text_box::<Message>(&e.text)
+            ]
+            .spacing(5),
+        );
+    }
+
+    col.into()
+}
+
+fn render_layout_details<'a, Message: 'a>(l: &InspectorLayout) -> Element<'a, Message> {
     column![
-        text(key).size(11).color(Color::from_rgb(0.5, 0.5, 0.5)),
-        text(value).size(14),
+        field::<Message>("Label", l.label.clone()),
+        field::<Message>("Confidence", format!("{:.2}%", l.proba * 100.0)),
+        bbox_field::<Message>(&l.bbox),
     ]
+    .spacing(8)
     .into()
 }
 
-fn bbox_field<'a, Message>(bbox: &[f32; 4]) -> Element<'a, Message>
-where
-    Message: 'a + Clone + std::fmt::Debug,
-{
+fn render_text_box<'a, Message: 'a>(content: &str) -> Element<'a, Message> {
+    container(
+        text(content.to_string())
+            .size(12)
+            .line_height(iced::widget::text::LineHeight::Relative(1.4)),
+    )
+    .padding(8)
+    .style(|_| container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.03).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn field<'a, Message: 'a>(key: &'a str, value: String) -> Element<'a, Message> {
+    row![
+        text(format!("{}:", key))
+            .size(10)
+            .color(Color::from_rgb(0.5, 0.5, 0.6))
+            .font(Font {
+                weight: Weight::Bold,
+                ..Default::default()
+            }),
+        text(value).size(11),
+    ]
+    .spacing(10)
+    .into()
+}
+
+fn bbox_field<'a, Message: 'a>(bbox: &[f32; 4]) -> Element<'a, Message> {
     let [x0, y0, x1, y1] = bbox;
-    let w = x1 - x0;
-    let h = y1 - y0;
+    let w = (x1 - x0).abs();
+    let h = (y1 - y0).abs();
 
     column![
         text("Geometry")
-            .size(11)
-            .color(Color::from_rgb(0.5, 0.5, 0.5)),
-        row![kv_small("X", *x0), kv_small("Y", *y0),].spacing(15),
-        row![kv_small("W", w), kv_small("H", h),].spacing(15),
+            .size(10)
+            .color(Color::from_rgb(0.5, 0.5, 0.6))
+            .font(Font {
+                weight: Weight::Bold,
+                ..Default::default()
+            }),
+        row![
+            text(format!("X:{:.1} Y:{:.1} W:{:.1} H:{:.1}", x0, y0, w, h))
+                .size(11)
+                .font(Font::MONOSPACE)
+        ]
     ]
-    .spacing(5)
+    .spacing(2)
     .into()
 }
 
-fn kv_small<'a, Message>(k: &'a str, v: f32) -> Element<'a, Message>
-where
-    Message: 'a + Clone + std::fmt::Debug,
-{
-    row![
-        text(k).size(11).color(Color::from_rgb(0.5, 0.5, 0.5)),
-        text(format!("{:.1}", v)).size(12).font(Font::MONOSPACE),
-    ]
-    .spacing(5)
-    .into()
-}
-
-fn section_header<'a, Message>(title: &'a str) -> Element<'a, Message>
-where
-    Message: 'a + Clone + std::fmt::Debug,
-{
+fn section_header<'a, Message: 'a>(title: &'a str) -> Element<'a, Message> {
     text(title)
-        .size(12)
+        .size(10)
         .font(Font {
             weight: Weight::Bold,
             ..Default::default()
         })
-        .color(Color::from_rgb(0.7, 0.7, 0.7))
+        .color(Color::from_rgb(0.6, 0.6, 0.7))
         .into()
 }

@@ -25,14 +25,14 @@ impl ImageBlock {
     Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct TextBlock {
-    pub(crate) text: String,
+    pub text: String,
 }
 
 #[derive(
     Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct List {
-    pub(crate) items: Vec<String>,
+    pub items: Vec<String>,
 }
 
 #[derive(
