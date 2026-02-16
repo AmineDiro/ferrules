@@ -329,6 +329,7 @@ impl TableTransformer {
                     x1: (cx + w / 2.0).max(0.0).min(orig_width as f32),
                     y1: (cy + h / 2.0).max(0.0).min(orig_height as f32),
                 },
+
                 label: Self::TABLE_LABELS[max_idx],
                 proba: max_prob,
             });
@@ -341,11 +342,68 @@ impl TableTransformer {
 impl TableParser {
     const ROW_OVERLAP_THRESHOLD: f32 = 0.5;
 
+    /// Minimum cell count below which a table is suspicious (when paired with a large area).
+    const MIN_CELL_COUNT: usize = 2;
+    /// Area threshold used when the cell count is low.
+    const SUSPICIOUS_AREA_LOW_CELLS: f32 = 1500.0;
+    /// Minimum row count below which a table is suspicious (when paired with a large area).
+    const MIN_ROW_COUNT: usize = 1;
+    /// Area threshold used when the row count is low.
+    const SUSPICIOUS_AREA_LOW_ROWS: f32 = 3000.0;
+    /// Large-area threshold: tables above this always try vision.
+    const LARGE_AREA_THRESHOLD: f32 = 5000.0;
+    /// Minimum ratio of total cell area to table area.
+    /// Below this the stream result is considered incomplete.
+    const CELL_COVERAGE_THRESHOLD: f32 = 0.3;
+
     pub fn new(transformer: Option<TableTransformer>) -> Self {
         Self {
             transformer,
             table_id_counter: AtomicUsize::new(0),
         }
+    }
+
+    /// Heuristic to decide whether the Vision (Table Transformer) fallback
+    /// should be attempted after a Stream parse.
+    ///
+    /// Returns `true` when:
+    /// - Stream found **no rows** at all.
+    /// - Few cells in a suspiciously large area.
+    /// - Few rows in a suspiciously large area.
+    /// - The table area exceeds `LARGE_AREA_THRESHOLD`.
+    /// - The total cell area covers less than `CELL_COVERAGE_THRESHOLD` of the table area.
+    fn should_try_vision(&self, table: &TableBlock, table_area: f32) -> bool {
+        let row_count = table.rows.len();
+        if row_count == 0 {
+            return true;
+        }
+
+        let cell_count: usize = table.rows.iter().map(|r| r.cells.len()).sum();
+
+        let is_suspicious = (cell_count <= Self::MIN_CELL_COUNT
+            && table_area > Self::SUSPICIOUS_AREA_LOW_CELLS)
+            || (row_count <= Self::MIN_ROW_COUNT && table_area > Self::SUSPICIOUS_AREA_LOW_ROWS);
+
+        if is_suspicious || table_area > Self::LARGE_AREA_THRESHOLD {
+            return true;
+        }
+
+        // Check whether the detected cells actually cover a reasonable
+        // fraction of the table bounding box. A low ratio means stream
+        // parsing likely missed significant content.
+        if table_area > 0.0 {
+            let total_cell_area: f32 = table
+                .rows
+                .iter()
+                .flat_map(|r| &r.cells)
+                .map(|c| c.bbox.area())
+                .sum();
+            if total_cell_area / table_area < Self::CELL_COVERAGE_THRESHOLD {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Main entry point to parse a table within a given bounding box on a page.
@@ -358,8 +416,7 @@ impl TableParser {
         page_image: &DynamicImage,
         downscale_factor: f32,
     ) -> Result<TableBlock, FerrulesError> {
-        // Decide between Lattice and Stream
-        // For now, let's try Lattice if we have paths
+        // TODO: Decide between Lattice and Stream
         if !paths.is_empty() {
             tracing::debug!(
                 "Page {} - BBox {:?} - {} paths. Trying Lattice...",
@@ -380,17 +437,11 @@ impl TableParser {
         let mut table = self.parse_stream(lines, table_bbox)?;
         table.algorithm = TableAlgorithm::Stream;
 
+        let area = table_bbox.area();
         let cell_count: usize = table.rows.iter().map(|r| r.cells.len()).sum();
         let row_count = table.rows.len();
 
-        // Heuristics to trigger Vision fallback:
-        // 1. Stream found very few cells in a large area.
-        // 2. Stream found no rows.
-        // 3. Large area (>5000 units) often benefits from model structure.
-        let area = table_bbox.area();
-        let is_suspicious = (cell_count <= 2 && area > 1500.0) || (row_count <= 1 && area > 3000.0);
-
-        if row_count == 0 || is_suspicious || area > 5000.0 {
+        if self.should_try_vision(&table, area) {
             tracing::debug!(
                 "Page {} - Stream suspicious ({} cells, {} rows). Trying Vision comparison...",
                 _page_id,
