@@ -64,6 +64,7 @@ impl BatchInferenceRunner {
                 Some(req) => req,
                 None => break, // Channel closed
             };
+            let batch_start = tokio::time::Instant::now();
             batch.push(first_req);
 
             let deadline = tokio::time::Instant::now() + self.batch_timeout;
@@ -86,7 +87,10 @@ impl BatchInferenceRunner {
                 continue;
             }
 
+            let accumulation_time = batch_start.elapsed().as_secs_f64() * 1000.0;
+
             // 2. Prepare batch input
+            let prep_start = tokio::time::Instant::now();
             let current_batch_size = batch.len();
 
             // Find max H and W
@@ -125,7 +129,10 @@ impl BatchInferenceRunner {
                     }
                 };
 
+            let prep_time = prep_start.elapsed().as_secs_f64() * 1000.0;
+
             // 3. Run Inference (Async)
+            let run_start = tokio::time::Instant::now();
             let input_f16 =
                 match tokio::task::spawn_blocking(move || batch_tensor.mapv(half::f16::from_f32))
                     .await
@@ -157,6 +164,18 @@ impl BatchInferenceRunner {
                 Ok::<_, ort::Error>((logits, boxes))
             }
             .await;
+
+            let run_time = run_start.elapsed().as_secs_f64() * 1000.0;
+            let total_batch_time = batch_start.elapsed().as_secs_f64() * 1000.0;
+
+            tracing::debug!(
+                "Table Transformer Batch: size={}, total={:.1}ms (accum={:.1}ms, prep={:.1}ms, run={:.1}ms)",
+                current_batch_size,
+                total_batch_time,
+                accumulation_time,
+                prep_time,
+                run_time
+            );
 
             // 4. Distribute results
             match run_result {

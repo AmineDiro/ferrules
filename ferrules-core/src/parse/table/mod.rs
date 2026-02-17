@@ -121,7 +121,7 @@ async fn handle_table_request(
         )
         .await;
     let inference_duration = start.elapsed().as_secs_f64() * 1000.0;
-    tracing::debug!("table inference time for page {page_id} took: {inference_duration}ms");
+    tracing::debug!("table total processing time for page {page_id} took: {inference_duration}ms");
 
     drop(_permit);
 
