@@ -274,6 +274,12 @@ mod ocr_mac {
     use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest};
     const CONFIDENCE_THRESHOLD: f32 = 0f32;
 
+    fn img_to_tiff(image: &DynamicImage) -> anyhow::Result<Vec<u8>> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut buffer, image::ImageFormat::Tiff)?;
+        Ok(buffer.into_inner())
+    }
+
     /// Convert vision coordinates to Bbox absolute coordinates
     #[inline]
     fn cgrect_to_bbox(
@@ -349,15 +355,16 @@ mod ocr_mac {
         }
 
         let combined_image = DynamicImage::ImageRgba8(combined_image);
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        if let Err(e) = combined_image.write_to(&mut buffer, image::ImageFormat::Tiff) {
-            let mut errs = Vec::with_capacity(inputs.len());
-            for _ in 0..inputs.len() {
-                errs.push(Err(anyhow::anyhow!(e.to_string())));
+        let raw_data = match img_to_tiff(&combined_image) {
+            Ok(data) => data,
+            Err(e) => {
+                let mut errs = Vec::with_capacity(inputs.len());
+                for _ in 0..inputs.len() {
+                    errs.push(Err(anyhow::anyhow!(e.to_string())));
+                }
+                return errs;
             }
-            return errs;
-        }
-        let raw_data = buffer.into_inner();
+        };
 
         let mut final_results = vec![Vec::new(); inputs.len()];
 
@@ -438,9 +445,7 @@ mod ocr_mac {
         rescale_factor: f32,
     ) -> anyhow::Result<Vec<OCRLines>> {
         let (img_width, img_height) = (image.width(), image.height());
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        image.write_to(&mut buffer, image::ImageFormat::Tiff)?;
-        let raw_data = buffer.into_inner();
+        let raw_data = img_to_tiff(image)?;
 
         let mut ocr_result = Vec::new();
         unsafe {
@@ -533,11 +538,7 @@ mod ocr_mac {
             // 2. Batch requests
             let s = Instant::now();
             unsafe {
-                let mut buffer = std::io::Cursor::new(Vec::new());
-                image
-                    .write_to(&mut buffer, image::ImageFormat::Tiff)
-                    .unwrap();
-                let raw_data = buffer.into_inner();
+                let raw_data = img_to_tiff(&image).unwrap();
 
                 let mut requests = vec![];
                 for _ in 0..n {
