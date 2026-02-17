@@ -11,8 +11,8 @@ use crate::error::FerrulesError;
 use crate::metrics::StepMetrics;
 
 const CONCURRENT_OCR_REQUESTS: usize = 32;
-const MAX_OCR_BATCH_SIZE: usize = 8;
-const OCR_BATCH_TIMEOUT_MS: u64 = 50;
+const MAX_OCR_BATCH_SIZE: usize = 16;
+const OCR_BATCH_TIMEOUT_MS: u64 = 100;
 
 #[derive(Debug)]
 pub struct OCRMetadata {
