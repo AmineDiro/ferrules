@@ -30,9 +30,10 @@
 //!     // Configure hardware acceleration
 //!     let ort_config = ORTConfig {
 //!         execution_providers: vec![OrtExecutionProvider::CPU],
-//!         intra_threads: 16,
+//!         intra_threads: 4
 //!         inter_threads: 4,
 //!         opt_level: None,
+//!         warmup: false,
 //!     };
 //!
 //!     // Initialize parser

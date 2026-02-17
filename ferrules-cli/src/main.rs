@@ -241,6 +241,7 @@ async fn main() {
         intra_threads: args.intra_threads,
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
+        warmup: false,
     };
 
     let page_range = match args.page_range {

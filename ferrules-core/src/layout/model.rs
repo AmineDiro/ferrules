@@ -42,6 +42,7 @@ pub struct ORTConfig {
     pub intra_threads: usize,
     pub inter_threads: usize,
     pub opt_level: Option<ORTGraphOptimizationLevel>,
+    pub warmup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -63,6 +64,7 @@ impl Default for ORTConfig {
             intra_threads: ORTLayoutParser::ORT_INTRATHREAD,
             inter_threads: ORTLayoutParser::ORT_INTERTHREAD,
             opt_level: Some(ORTGraphOptimizationLevel::Level1),
+            warmup: false,
         }
     }
 }
@@ -255,13 +257,33 @@ impl ORTLayoutParser {
             .context("can't find name output input")?
             .to_owned();
 
-        Ok(Self {
+        let parser = Self {
             session,
             output_name,
             config,
             // TODO: use ticket mutex instead of buffer pool to access resources
             buffer_pool: Mutex::new(Vec::with_capacity(32)),
-        })
+        };
+
+        if parser.config.warmup {
+            parser.warmup().context("Model warmup failed")?;
+        }
+
+        Ok(parser)
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn warmup(&self) -> anyhow::Result<()> {
+        let input = Array4::zeros([
+            1,
+            3,
+            Self::REQUIRED_HEIGHT as usize,
+            Self::REQUIRED_WIDTH as usize,
+        ]);
+        // We use the sync run method for warmup during initialization
+        let _ = self.run(&input)?;
+        tracing::info!("Layout model warmup complete");
+        Ok(())
     }
 
     pub fn run(

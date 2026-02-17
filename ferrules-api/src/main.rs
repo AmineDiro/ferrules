@@ -201,6 +201,7 @@ async fn main() {
         intra_threads: args.intra_threads,
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
+        warmup: true,
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);
