@@ -17,7 +17,7 @@ use crate::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
     metrics::{OCRMetrics, PageMetrics, StepMetrics, TableMetrics},
-    ocr::parse_image_ocr,
+    ocr::{OCRMetadata, OCRQueue, ParseOCRRequest},
     parse::table::ParseTableQueue,
 };
 
@@ -69,6 +69,8 @@ async fn parse_page_text(
     native_text_lines: Vec<Line>,
     page_layout: &[LayoutBBox],
     page_image: Arc<DynamicImage>,
+    ocr_queue: OCRQueue,
+    page_id: PageID,
     downscale_factor: f32,
 ) -> Result<(Vec<Line>, Option<StepMetrics>, bool), FerrulesError> {
     let text_layout_box: Vec<&LayoutBBox> =
@@ -76,29 +78,25 @@ async fn parse_page_text(
     let need_ocr = page_needs_ocr(&text_layout_box, &native_text_lines);
 
     let (ocr_result, ocr_metrics) = if need_ocr {
-        let page_image_clone = Arc::clone(&page_image);
-        let start_wait = Instant::now();
-        let _permit = crate::ocr::OCR_SEMAPHORE.acquire().await.unwrap();
-        let wait_duration = start_wait.elapsed();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let req = ParseOCRRequest {
+            page_id,
+            page_image: Arc::clone(&page_image),
+            rescale_factor: downscale_factor,
+            metadata: OCRMetadata {
+                response_tx: tx,
+                queue_time: Instant::now(),
+            },
+        };
+        ocr_queue.push(req).await?;
+        tracing::debug!("OCR request pushed to queue for page {}", page_id);
 
-        let start_ocr = Instant::now();
-        // We pass None for debug_dir for now
-        let res = parse_image_ocr(&page_image_clone, None, downscale_factor).await;
+        let res = rx
+            .await
+            .map_err(|_| FerrulesError::LayoutParsingError)? // TODO: OCR error
+            .map_err(|_| FerrulesError::LayoutParsingError)?;
 
-        let ocr_duration = start_ocr.elapsed();
-        drop(_permit);
-        tracing::debug!(
-            "OCR semaphore wait: {}ms, OCR execution: {}ms",
-            wait_duration.as_millis(),
-            ocr_duration.as_millis()
-        );
-        match res {
-            Ok((lines, mut metrics)) => {
-                metrics.idle_time_ms = wait_duration.as_secs_f64() * 1000.0;
-                (Some(lines), Some(metrics))
-            }
-            Err(_) => (None, None),
-        }
+        (Some(res.ocr_lines), Some(res.step_metrics))
     } else {
         (None, None)
     };
@@ -135,6 +133,7 @@ pub async fn parse_page_full(
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
     table_queue: ParseTableQueue,
+    ocr_queue: OCRQueue,
 ) -> Result<StructuredPage, FerrulesError> {
     let start_time = Instant::now();
     let span = tracing::Span::current();
@@ -178,6 +177,8 @@ pub async fn parse_page_full(
         text_lines,
         &page_layout,
         Arc::clone(&page_image),
+        ocr_queue,
+        page_id,
         downscale_factor,
     )
     .await?;

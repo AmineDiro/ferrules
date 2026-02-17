@@ -143,6 +143,17 @@ struct Args {
         help = "Specify the directory to store debug output files"
     )]
     debug_dir: Option<PathBuf>,
+
+    /// Enable profiling for layout model
+    #[arg(long, help = "Enable profiling for the layout model (saved as .json)")]
+    profile_layout: bool,
+
+    /// Enable profiling for table transformer model
+    #[arg(
+        long,
+        help = "Enable profiling for the table transformer model (saved as .json)"
+    )]
+    profile_table: bool,
 }
 
 fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
@@ -242,6 +253,16 @@ async fn main() {
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
         warmup: false,
+        profile_layout: if args.profile_layout {
+            Some(PathBuf::from("profile_layout"))
+        } else {
+            None
+        },
+        profile_table: if args.profile_table {
+            Some(PathBuf::from("profile_table"))
+        } else {
+            None
+        },
     };
 
     let page_range = match args.page_range {

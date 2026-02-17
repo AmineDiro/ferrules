@@ -12,7 +12,7 @@ use crate::metrics::StepMetrics;
 
 pub mod model;
 
-const CONCURRENT_LAYOUT_REQUESTS: usize = 32;
+const CONCURRENT_LAYOUT_REQUESTS: usize = 16;
 
 #[derive(Debug)]
 pub struct Metadata {

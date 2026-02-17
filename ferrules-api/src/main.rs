@@ -108,6 +108,17 @@ struct Args {
 
     #[arg(long, short = 'O', help = "Ort graph optimization level")]
     graph_opt_level: Option<usize>,
+
+    /// Enable profiling for layout model
+    #[arg(long, help = "Enable profiling for the layout model (saved as .json)")]
+    profile_layout: bool,
+
+    /// Enable profiling for table transformer model
+    #[arg(
+        long,
+        help = "Enable profiling for the table transformer model (saved as .json)"
+    )]
+    profile_table: bool,
 }
 
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
@@ -202,6 +213,16 @@ async fn main() {
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
         warmup: true,
+        profile_layout: if args.profile_layout {
+            Some(std::path::PathBuf::from("profile_layout_api"))
+        } else {
+            None
+        },
+        profile_table: if args.profile_table {
+            Some(std::path::PathBuf::from("profile_table_api"))
+        } else {
+            None
+        },
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);

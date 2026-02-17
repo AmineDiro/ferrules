@@ -43,6 +43,28 @@ pub struct ORTConfig {
     pub inter_threads: usize,
     pub opt_level: Option<ORTGraphOptimizationLevel>,
     pub warmup: bool,
+    pub profile_layout: Option<std::path::PathBuf>,
+    pub profile_table: Option<std::path::PathBuf>,
+}
+
+impl ORTConfig {
+    /// Returns a new vector of execution providers sorted by priority (accelerators first).
+    pub fn get_sorted_providers(&self) -> Vec<OrtExecutionProvider> {
+        let mut providers = self.execution_providers.clone();
+        providers.sort_by(|a, b| {
+            let priority = |p: &OrtExecutionProvider| -> u8 {
+                match p {
+                    OrtExecutionProvider::Trt(_) => 4,
+                    OrtExecutionProvider::CUDA(_) => 3,
+                    OrtExecutionProvider::CoreML { .. } => 2,
+                    OrtExecutionProvider::CPU => 1,
+                }
+            };
+            // Sort in descending order of priority (higher priority comes first)
+            priority(b).cmp(&priority(a))
+        });
+        providers
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,7 +79,7 @@ impl Default for ORTConfig {
     fn default() -> Self {
         let mut execution_providers = vec![OrtExecutionProvider::CPU];
         if cfg!(target_os = "macos") {
-            execution_providers.push(OrtExecutionProvider::CoreML { ane_only: false });
+            execution_providers.push(OrtExecutionProvider::CoreML { ane_only: true });
         }
         Self {
             execution_providers,
@@ -65,6 +87,8 @@ impl Default for ORTConfig {
             inter_threads: ORTLayoutParser::ORT_INTERTHREAD,
             opt_level: Some(ORTGraphOptimizationLevel::Level1),
             warmup: false,
+            profile_layout: None,
+            profile_table: None,
         }
     }
 }
@@ -197,12 +221,11 @@ impl ORTLayoutParser {
     pub const ORT_INTRATHREAD: usize = 16;
     pub const ORT_INTERTHREAD: usize = 4;
 
-    pub fn new(mut config: ORTConfig) -> anyhow::Result<Self> {
+    pub fn new(config: ORTConfig) -> anyhow::Result<Self> {
         let mut execution_providers = Vec::new();
 
-        // Sort providers by priority cpu -> cuda -> coreml
-        let providers = &mut config.execution_providers;
-        providers.sort();
+        // Get providers sorted by priority: accelerators first
+        let providers = config.get_sorted_providers();
 
         // Providers
         for provider in providers {
@@ -210,20 +233,20 @@ impl ORTLayoutParser {
                 OrtExecutionProvider::Trt(device_id) => {
                     execution_providers.push(
                         TensorRTExecutionProvider::default()
-                            .with_device_id(*device_id)
+                            .with_device_id(device_id)
                             .build(),
                     );
                 }
                 OrtExecutionProvider::CUDA(device_id) => {
                     execution_providers.push(
                         CUDAExecutionProvider::default()
-                            .with_device_id(*device_id)
+                            .with_device_id(device_id)
                             .build(),
                     );
                 }
                 OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if *ane_only {
+                    let provider = if ane_only {
                         provider.with_ane_only().build()
                     } else {
                         provider.build()
@@ -243,12 +266,17 @@ impl ORTLayoutParser {
             None => GraphOptimizationLevel::Disable,
         };
 
-        let session = Session::builder()?
+        let mut builder = Session::builder()?
             .with_execution_providers(execution_providers)?
             .with_optimization_level(opt_lvl)?
             .with_intra_threads(config.intra_threads)?
-            .with_inter_threads(config.inter_threads)?
-            .commit_from_memory(LAYOUT_MODEL_BYTES)?;
+            .with_inter_threads(config.inter_threads)?;
+
+        if let Some(profile_path) = &config.profile_layout {
+            builder = builder.with_profiling(profile_path)?;
+        }
+
+        let session = builder.commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let output_name = session
             .outputs

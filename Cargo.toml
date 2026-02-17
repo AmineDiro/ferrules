@@ -21,10 +21,13 @@ rkyv = { version = "0.7.45", features = ["validation"] }
 metrics = "0.24.1"
 
 [profile.release]
-strip = "symbols"
+# strip = "symbols"
 opt-level = 3
-# debug = 1
 
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[profile.profiling]
+inherits = "release"
+debug = true

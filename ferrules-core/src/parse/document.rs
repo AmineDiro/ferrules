@@ -21,6 +21,7 @@ use crate::{
         ParseLayoutQueue,
     },
     metrics::ParsingMetrics,
+    ocr::{OCRParser, OCRQueue},
     parse::table::{ParseTableQueue, TableParser, TableTransformer},
 };
 
@@ -58,6 +59,7 @@ async fn parse_task<F>(
     parse_native_result: ParseNativePageResult,
     layout_queue: ParseLayoutQueue,
     table_queue: ParseTableQueue,
+    ocr_queue: OCRQueue,
     debug_dir: Option<PathBuf>,
     callback: Option<F>,
 ) -> Result<StructuredPage, FerrulesError>
@@ -71,6 +73,7 @@ where
         debug_dir,
         layout_queue.clone(),
         table_queue.clone(),
+        ocr_queue.clone(),
     )
     .await;
     if let Some(callback) = callback {
@@ -88,6 +91,7 @@ pub struct FerrulesParser {
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
     table_queue: ParseTableQueue,
+    ocr_queue: OCRQueue,
 }
 
 impl FerrulesParser {
@@ -109,10 +113,13 @@ impl FerrulesParser {
         let transformer = TableTransformer::new(&layout_config).ok();
         let table_parser = Arc::new(TableParser::new(transformer));
         let table_queue = ParseTableQueue::new(table_parser);
+        let ocr_parser = Arc::new(OCRParser::new());
+        let ocr_queue = OCRQueue::new(ocr_parser);
         Self {
             layout_queue,
             native_queue,
             table_queue,
+            ocr_queue,
         }
     }
     /// Parses a document into a structured format with optional page-level progress callback
@@ -292,6 +299,7 @@ impl FerrulesParser {
                             parse_native_result,
                             self.layout_queue.clone(),
                             self.table_queue.clone(),
+                            self.ocr_queue.clone(),
                             tmp_dir,
                             callback,
                         )

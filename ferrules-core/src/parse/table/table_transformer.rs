@@ -208,26 +208,29 @@ impl TableTransformer {
     pub fn new(config: &crate::layout::model::ORTConfig) -> Result<Self, FerrulesError> {
         let mut execution_providers = Vec::new();
 
+        // Get providers sorted by priority: accelerators first
+        let providers = config.get_sorted_providers();
+
         // Providers
-        for provider in &config.execution_providers {
+        for provider in providers {
             match provider {
                 crate::layout::model::OrtExecutionProvider::Trt(device_id) => {
                     execution_providers.push(
                         TensorRTExecutionProvider::default()
-                            .with_device_id(*device_id)
+                            .with_device_id(device_id)
                             .build(),
                     );
                 }
                 crate::layout::model::OrtExecutionProvider::CUDA(device_id) => {
                     execution_providers.push(
                         CUDAExecutionProvider::default()
-                            .with_device_id(*device_id)
+                            .with_device_id(device_id)
                             .build(),
                     );
                 }
                 crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if *ane_only {
+                    let provider = if ane_only {
                         provider.with_ane_only().build()
                     } else {
                         provider.build()
@@ -253,7 +256,7 @@ impl TableTransformer {
             None => GraphOptimizationLevel::Disable,
         };
 
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
             .with_execution_providers(execution_providers)
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
@@ -262,7 +265,15 @@ impl TableTransformer {
             .with_intra_threads(config.intra_threads)
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
             .with_inter_threads(config.inter_threads)
-            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?
+            .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
+
+        if let Some(profile_path) = &config.profile_table {
+            builder = builder
+                .with_profiling(profile_path)
+                .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
+        }
+
+        let session = builder
             .commit_from_memory(TABLE_MODEL_BYTES)
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
 
