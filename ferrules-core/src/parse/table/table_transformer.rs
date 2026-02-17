@@ -42,9 +42,9 @@ struct BatchInferenceRunner {
 
 impl BatchInferenceRunner {
     /// maximum batch size for the table transformer to process
-    const MAX_BATCH_SIZE: usize = 8;
+    const MAX_BATCH_SIZE: usize = 16;
     /// maximum time to wait for a batch to be filled
-    const BATCH_TIMEOUT: Duration = Duration::from_millis(10);
+    const BATCH_TIMEOUT: Duration = Duration::from_millis(100);
 
     fn new(session: Session, rx: mpsc::Receiver<InferenceRequest>) -> Self {
         Self {
@@ -606,5 +606,196 @@ impl TableTransformer {
             has_borders: true,
             algorithm: TableAlgorithm::Vision,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::model::{ORTConfig, OrtExecutionProvider};
+    use std::time::Instant;
+
+    fn get_test_image() -> DynamicImage {
+        // Create a random image
+        let width = 1000;
+        let height = 1000;
+        let mut buffer = image::ImageBuffer::new(width, height);
+        for (_, _, pixel) in buffer.enumerate_pixels_mut() {
+            *pixel = image::Rgb([rand::random(), rand::random(), rand::random()]);
+        }
+        DynamicImage::ImageRgb8(buffer)
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_cpu() {
+        // Configure for CPU
+        let config = ORTConfig {
+            execution_providers: vec![OrtExecutionProvider::CPU],
+            ..ORTConfig::default()
+        };
+
+        println!("Loading model on CPU...");
+        let load_start = Instant::now();
+        let model = TableTransformer::new(&config).expect("Failed to load model on CPU");
+        println!("Model loaded in {:?}", load_start.elapsed());
+
+        let img = get_test_image();
+        let input = model.preprocess(&img);
+
+        // Warmup
+        println!("Warming up...");
+        let _ = model.run(input.clone()).await.expect("Warmup failed");
+
+        // Benchmark
+        println!("Running inference...");
+        let start = Instant::now();
+        let _ = model.run(input).await.expect("Inference failed");
+        let duration = start.elapsed();
+        println!("CPU Inference time: {:?}", duration);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn test_benchmark_coreml() {
+        // Configure for CoreML (ANE)
+        let config = ORTConfig {
+            execution_providers: vec![OrtExecutionProvider::CoreML { ane_only: true }],
+            ..ORTConfig::default()
+        };
+
+        println!("Loading model on CoreML (ANE)...");
+        let load_start = Instant::now();
+        let model = TableTransformer::new(&config).expect("Failed to load model on CoreML");
+        println!("Model loaded in {:?}", load_start.elapsed());
+
+        let img = get_test_image();
+        let input = model.preprocess(&img);
+
+        // Warmup
+        println!("Warming up...");
+        let _ = model.run(input.clone()).await.expect("Warmup failed");
+
+        // Benchmark
+        println!("Running inference...");
+        let start = Instant::now();
+        let _ = model.run(input).await.expect("Inference failed");
+        let duration = start.elapsed();
+        println!("CoreML (ANE) Inference time: {:?}", duration);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn test_benchmark_coreml_cpu() {
+        // Configure for CoreML (CPU ONLY)
+        let config = ORTConfig {
+            execution_providers: vec![OrtExecutionProvider::CoreML { ane_only: false }],
+            ..ORTConfig::default()
+        };
+
+        println!("Loading model on CoreML (CPU)...");
+        let load_start = Instant::now();
+        let model = TableTransformer::new(&config).expect("Failed to load model on CoreML");
+        println!("Model loaded in {:?}", load_start.elapsed());
+
+        let img = get_test_image();
+        let input = model.preprocess(&img);
+
+        // Warmup
+        println!("Warming up...");
+        let _ = model.run(input.clone()).await.expect("Warmup failed");
+
+        // Benchmark
+        println!("Running inference...");
+        let start = Instant::now();
+        let _ = model.run(input).await.expect("Inference failed");
+        let duration = start.elapsed();
+        println!("CoreML (CPU) Inference time: {:?}", duration);
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_batch_coreml() {
+        // Configure for CoreML (ANE)
+        let config = ORTConfig {
+            execution_providers: vec![OrtExecutionProvider::CoreML { ane_only: true }],
+            ..ORTConfig::default()
+        };
+
+        println!("Loading model for batch benchmark on CoreML...");
+        let model = TableTransformer::new(&config).expect("Failed to load model");
+        let img = get_test_image();
+        let input = model.preprocess(&img);
+
+        // Warmup
+        let _ = model.run(input.clone()).await.expect("Warmup failed");
+
+        let batch_size = 16;
+        println!("Running batch inference (batch size: {})...", batch_size);
+
+        let mut handles = Vec::with_capacity(batch_size);
+        let start = Instant::now();
+
+        // Spawn concurrent requests to trigger batching
+        for _ in 0..batch_size {
+            let model = model.clone();
+            let input = input.clone();
+            handles.push(tokio::spawn(async move { model.run(input).await }));
+        }
+
+        for h in handles {
+            let _ = h.await.unwrap().expect("Inference failed");
+        }
+
+        let duration = start.elapsed();
+        println!(
+            "Batch (16) CoreML Inference time: {:?} ({:?} per item)",
+            duration,
+            duration / batch_size as u32
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn test_benchmark_batch_sizes_ane() {
+        // Configure for CoreML (ANE)
+        let config = ORTConfig {
+            execution_providers: vec![OrtExecutionProvider::CoreML { ane_only: true }],
+            ..ORTConfig::default()
+        };
+
+        println!("Loading model for batch size benchmark on CoreML (ANE)...");
+        let model = TableTransformer::new(&config).expect("Failed to load model");
+        let img = get_test_image();
+        let input = model.preprocess(&img);
+
+        // Warmup
+        let _ = model.run(input.clone()).await.expect("Warmup failed");
+
+        let batch_sizes = [1, 2, 4, 8, 16, 32, 64];
+
+        println!("\n| Batch Size | Latency (ms) | Throughput (img/s) |");
+        println!("|---|---|---|");
+
+        for &batch_size in &batch_sizes {
+            let mut handles = Vec::with_capacity(batch_size);
+            let start = Instant::now();
+
+            // Spawn concurrent requests to trigger batching
+            for _ in 0..batch_size {
+                let model = model.clone();
+                let input = input.clone();
+                handles.push(tokio::spawn(async move { model.run(input).await }));
+            }
+
+            for h in handles {
+                let _ = h.await.unwrap().expect("Inference failed");
+            }
+
+            let duration = start.elapsed();
+            let latency_ms = duration.as_millis();
+            let throughput = batch_size as f64 / duration.as_secs_f64();
+
+            println!("| {} | {} | {:.2} |", batch_size, latency_ms, throughput);
+        }
+        println!("\n");
     }
 }

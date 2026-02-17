@@ -19,7 +19,7 @@ use lattice::parse_table_lattice;
 use stream::parse_table_stream;
 pub use table_transformer::TableTransformer;
 
-const TABLE_PARSER_CONCURRENCY: usize = 32;
+const TABLE_PARSER_CONCURRENCY: usize = 16;
 
 #[derive(Debug)]
 pub struct TableMetadata {

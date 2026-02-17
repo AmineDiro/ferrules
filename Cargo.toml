@@ -30,4 +30,6 @@ lto = "thin"
 
 [profile.profiling]
 inherits = "release"
-debug = true
+debug = 2
+split-debuginfo = "packed"
+strip = false
