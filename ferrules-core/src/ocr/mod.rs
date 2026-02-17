@@ -1,5 +1,7 @@
 use image::DynamicImage;
 use lazy_static::lazy_static;
+use std::path::PathBuf;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 
 lazy_static! {
@@ -9,6 +11,8 @@ lazy_static! {
 }
 
 use crate::entities::{BBox, Line};
+use crate::error::FerrulesError;
+use crate::metrics::StepMetrics;
 
 #[cfg(target_os = "linux")]
 use ocr_linux::parse_image_ocr as parse_image_ocr_inner;
@@ -34,11 +38,23 @@ impl OCRLines {
     }
 }
 
-pub(crate) fn parse_image_ocr(
+pub async fn parse_image_ocr(
     image: &DynamicImage,
+    _debug_dir: Option<PathBuf>,
     rescale_factor: f32,
-) -> anyhow::Result<Vec<OCRLines>> {
-    parse_image_ocr_inner(image, rescale_factor)
+) -> Result<(Vec<OCRLines>, StepMetrics), FerrulesError> {
+    let start = Instant::now();
+    let ocr_result = parse_image_ocr_inner(image, rescale_factor)
+        .map_err(|_| FerrulesError::LayoutParsingError)?; // TODO: Add specific OCR error variant
+    let execution_time_ms = start.elapsed().as_millis();
+
+    let step_metrics = StepMetrics {
+        queue_time_ms: 0,
+        execution_time_ms,
+        idle_time_ms: 0,
+    };
+
+    Ok((ocr_result, step_metrics))
 }
 
 #[cfg(target_os = "macos")]

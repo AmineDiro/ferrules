@@ -1,4 +1,5 @@
 use image::DynamicImage;
+
 use plsfix::fix_text;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,7 @@ use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 use crate::{
     blocks::{Block, TableBlock},
     layout::model::LayoutBBox,
+    metrics::{PageMetrics, ParsingMetrics},
 };
 
 pub type PageID = usize;
@@ -232,6 +234,7 @@ pub struct StructuredPage {
     pub native_lines: Vec<Line>,
     pub layout: Vec<LayoutBBox>,
     pub ocr_lines: Vec<Line>,
+    pub metrics: PageMetrics,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -269,6 +272,7 @@ pub struct ParsedDocument {
     pub blocks: Vec<Block>,
     pub debug_path: Option<PathBuf>,
     pub metadata: DocumentMetadata,
+    pub metrics: ParsingMetrics,
 }
 
 #[derive(

@@ -8,6 +8,7 @@ use tracing::{Instrument, Span};
 
 use crate::entities::PageID;
 use crate::error::FerrulesError;
+use crate::metrics::StepMetrics;
 
 pub mod model;
 
@@ -29,8 +30,7 @@ pub(crate) struct ParseLayoutRequest {
 pub(crate) struct ParseLayoutResponse {
     pub(crate) page_id: PageID,
     pub(crate) layout_bbox: Vec<LayoutBBox>,
-    pub(crate) layout_parse_duration_ms: u128,
-    pub(crate) layout_queue_time_ms: u128,
+    pub(crate) step_metrics: StepMetrics,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +79,9 @@ async fn handle_request(
     req: ParseLayoutRequest,
     layout_queue_time_ms: u128,
 ) {
+    let start_wait = Instant::now();
     let _permit = s.acquire().await.unwrap();
+    let idle_time_ms = start_wait.elapsed().as_millis();
 
     let ParseLayoutRequest {
         page_id,
@@ -99,8 +101,11 @@ async fn handle_request(
     let layout_result = layout_result.map(|l| ParseLayoutResponse {
         page_id,
         layout_bbox: l,
-        layout_parse_duration_ms: inference_duration,
-        layout_queue_time_ms,
+        step_metrics: StepMetrics {
+            queue_time_ms: layout_queue_time_ms,
+            execution_time_ms: inference_duration,
+            idle_time_ms,
+        },
     });
     metadata
         .response_tx

@@ -86,6 +86,7 @@ pub mod debug_info;
 pub mod entities;
 pub mod error;
 pub mod layout;
+pub mod metrics;
 pub mod ocr;
 pub mod render;
 pub mod utils;

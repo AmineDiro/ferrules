@@ -18,7 +18,7 @@ clap = { workspace = true }
 
 # API specific
 axum = { version = "0.7.4", features = ["multipart", "json"] }
-ferrules-core = { path = "../ferrules-core" }
+ferrules-core = { path = "../ferrules-core", features = ["metrics"] }
 tower-http = { version = "0.6.1", features = ["trace", "limit"] }
 tempfile = "3.16.0"
 
@@ -35,4 +35,6 @@ axum-tracing-opentelemetry = { version = "0.25.0" }
 # sentry integration
 sentry = { version = "0.36.0", features = ["log"] }
 sentry-tracing = "0.36.0"
+metrics = "0.24.1"
+metrics-exporter-prometheus = "0.16.0"
 mimalloc = "0.1.43"

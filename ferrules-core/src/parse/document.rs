@@ -20,6 +20,7 @@ use crate::{
         model::{ORTConfig, ORTLayoutParser},
         ParseLayoutQueue,
     },
+    metrics::ParsingMetrics,
     parse::table::{ParseTableQueue, TableParser, TableTransformer},
 };
 
@@ -202,12 +203,18 @@ impl FerrulesParser {
 
         let duration = start_time.elapsed();
 
+        let parsing_metrics = ParsingMetrics {
+            total_duration_ms: duration.as_millis(),
+            pages: parsed_pages.iter().map(|p| p.metrics.clone()).collect(),
+        };
+
         Ok(ParsedDocument {
             doc_name,
             pages: doc_pages,
             blocks,
             debug_path: debug_dir,
             metadata: DocumentMetadata::new(duration),
+            metrics: parsing_metrics,
         })
     }
 

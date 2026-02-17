@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 rkyv = { workspace = true }
 bytecheck = "0.6.12"
+metrics = { workspace = true, optional = true }
 
 # pdf reader
 imageproc = "0.25.0"
@@ -40,6 +41,10 @@ rand = "0.8.5"
 build_html = "2.6.0"
 regex = "1.11.1"
 html2md = "0.2.15"
+
+[features]
+default = []
+metrics = ["dep:metrics"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models", "half"] }

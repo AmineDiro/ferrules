@@ -16,6 +16,7 @@ use crate::{
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
+    metrics::{OCRMetrics, PageMetrics, StepMetrics},
     ocr::parse_image_ocr,
     parse::table::ParseTableQueue,
 };
@@ -69,32 +70,37 @@ async fn parse_page_text(
     page_layout: &[LayoutBBox],
     page_image: Arc<DynamicImage>,
     downscale_factor: f32,
-) -> Result<(Vec<Line>, bool), FerrulesError> {
+) -> Result<(Vec<Line>, Option<StepMetrics>, bool), FerrulesError> {
     let text_layout_box: Vec<&LayoutBBox> =
         page_layout.iter().filter(|b| b.is_text_block()).collect();
     let need_ocr = page_needs_ocr(&text_layout_box, &native_text_lines);
 
-    let ocr_result = if need_ocr {
+    let (ocr_result, ocr_metrics) = if need_ocr {
         let page_image_clone = Arc::clone(&page_image);
         let start_wait = Instant::now();
         let _permit = crate::ocr::OCR_SEMAPHORE.acquire().await.unwrap();
         let wait_duration = start_wait.elapsed();
 
         let start_ocr = Instant::now();
-        let res = tokio::task::spawn_blocking(move || {
-            parse_image_ocr(&page_image_clone, downscale_factor).ok()
-        })
-        .await
-        .unwrap_or(None);
+        // We pass None for debug_dir for now
+        let res = parse_image_ocr(&page_image_clone, None, downscale_factor).await;
+
         let ocr_duration = start_ocr.elapsed();
+        drop(_permit);
         tracing::debug!(
             "OCR semaphore wait: {}ms, OCR execution: {}ms",
             wait_duration.as_millis(),
             ocr_duration.as_millis()
         );
-        res
+        match res {
+            Ok((lines, mut metrics)) => {
+                metrics.idle_time_ms = wait_duration.as_millis();
+                (Some(lines), Some(metrics))
+            }
+            Err(_) => (None, None),
+        }
     } else {
-        None
+        (None, None)
     };
 
     let lines = if need_ocr && ocr_result.is_some() {
@@ -108,7 +114,7 @@ async fn parse_page_text(
     } else {
         native_text_lines
     };
-    Ok((lines, need_ocr))
+    Ok((lines, ocr_metrics, need_ocr))
 }
 
 #[instrument(
@@ -128,6 +134,7 @@ pub async fn parse_page_full(
     layout_queue: ParseLayoutQueue,
     table_queue: ParseTableQueue,
 ) -> Result<StructuredPage, FerrulesError> {
+    let start_time = Instant::now();
     let span = tracing::Span::current();
     let ParseNativePageResult {
         page_id,
@@ -153,10 +160,9 @@ pub async fn parse_page_full(
     layout_queue.push(layout_req).await?;
 
     let ParseLayoutResponse {
-        page_id,
+        page_id: _,
         layout_bbox: page_layout,
-        layout_parse_duration_ms,
-        layout_queue_time_ms,
+        step_metrics: layout_step_metrics,
     } = layout_rx
         .await
         // TODO: better unwrapping
@@ -164,13 +170,18 @@ pub async fn parse_page_full(
         .map_err(|_| FerrulesError::LayoutParsingError)?;
 
     let native_lines_captured = text_lines.clone();
-    let (text_lines_processed, need_ocr) = parse_page_text(
+    let (text_lines_processed, ocr_step_metrics_inner, need_ocr) = parse_page_text(
         text_lines,
         &page_layout,
         Arc::clone(&page_image),
         downscale_factor,
     )
     .await?;
+
+    let ocr_step_metrics = ocr_step_metrics_inner.map(|m| OCRMetrics {
+        step_metrics: m,
+        lines_count: text_lines_processed.len(), // Approximate lines count from OCR result
+    });
 
     // Merging elements with layout
     let mut elements = build_page_elements(&page_layout, &text_lines_processed, page_id)?;
@@ -205,11 +216,17 @@ pub async fn parse_page_full(
         if let Ok((idx, Ok(Ok(resp)))) = res {
             if let ElementType::Table(ref mut table_opt) = elements[idx].kind {
                 *table_opt = Some(resp.table_block);
-                total_table_parse_duration += resp.table_parse_duration_ms;
-                total_table_queue_time += resp.table_queue_time_ms;
+                total_table_parse_duration += resp.step_metrics.execution_time_ms;
+                total_table_queue_time += resp.step_metrics.queue_time_ms;
             }
         }
     }
+
+    let table_step_metrics = StepMetrics {
+        queue_time_ms: total_table_queue_time,
+        execution_time_ms: total_table_parse_duration,
+        idle_time_ms: 0, // Should also sum idle time if available, but let's stick to what we have or update loop
+    };
     if let Some(tmp_dir) = debug_dir {
         debug_page(
             &tmp_dir,
@@ -222,6 +239,20 @@ pub async fn parse_page_full(
             &paths_arc,
         )?
     };
+
+    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms);
+
+    let page_metrics = PageMetrics {
+        page_id,
+        total_duration_ms: start_time.elapsed().as_millis(),
+        native_step,
+        layout_step: layout_step_metrics,
+        table_step: table_step_metrics,
+        ocr_step: ocr_step_metrics,
+    };
+
+    page_metrics.record();
+    page_metrics.record_span(&span);
 
     let structured_page = StructuredPage {
         id: page_id,
@@ -238,35 +269,13 @@ pub async fn parse_page_full(
         } else {
             vec![]
         },
+        metrics: page_metrics,
     };
-
-    span.record(
-        "layout_queue_time_ms",
-        format!("{:?}", layout_queue_time_ms),
-    );
-    span.record(
-        "layout_parse_duration_ms",
-        format!("{:?}", layout_parse_duration_ms),
-    );
-
-    span.record(
-        "parse_native_duration_ms",
-        format!("{:?}", parse_native_metadata.parse_native_duration_ms),
-    );
-    // TODO: add OCR timings
-    span.record(
-        "table_parse_duration_ms",
-        format!("{:?}", total_table_parse_duration),
-    );
-    span.record(
-        "table_queue_time_ms",
-        format!("{:?}", total_table_queue_time),
-    );
-    // TODO: add table parser timings
 
     Ok(structured_page)
 }
 
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
 fn debug_page(
     tmp_dir: &Path,
     page_idx: PageID,

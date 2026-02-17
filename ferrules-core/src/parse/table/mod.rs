@@ -9,6 +9,7 @@ use tracing::{Instrument, Span};
 use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::{BBox, PDFPath, PageID};
 use crate::error::FerrulesError;
+use crate::metrics::StepMetrics;
 
 pub mod lattice;
 pub mod stream;
@@ -40,8 +41,7 @@ pub(crate) struct ParseTableRequest {
 #[derive(Debug)]
 pub(crate) struct ParseTableResponse {
     pub(crate) table_block: TableBlock,
-    pub(crate) table_parse_duration_ms: u128,
-    pub(crate) table_queue_time_ms: u128,
+    pub(crate) step_metrics: StepMetrics,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +89,9 @@ async fn handle_table_request(
     req: ParseTableRequest,
     table_queue_time_ms: u128,
 ) {
+    let start_wait = Instant::now();
     let _permit = s.acquire().await.unwrap();
+    let idle_time_ms = start_wait.elapsed().as_millis();
 
     let ParseTableRequest {
         page_id,
@@ -125,8 +127,11 @@ async fn handle_table_request(
 
     let response = table_result.map(|t| ParseTableResponse {
         table_block: t,
-        table_parse_duration_ms: inference_duration,
-        table_queue_time_ms,
+        step_metrics: StepMetrics {
+            queue_time_ms: table_queue_time_ms,
+            execution_time_ms: inference_duration,
+            idle_time_ms,
+        },
     });
 
     let _ = metadata.response_tx.send(response);

@@ -149,8 +149,10 @@ struct AppState {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
     // Check providers
     let providers = parse_ep_args(&args);
+
     // Initialize Sentry if DSN is provided
     let use_sentry = args.sentry_dsn.is_some();
     let _guard = if let Some(dsn) = args.sentry_dsn {
@@ -176,6 +178,12 @@ async fn main() {
     )
     .expect("can't setup tracing for API");
 
+    // Initialize Prometheus exporter
+    let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
+    let handle = builder
+        .install_recorder()
+        .expect("failed to install Prometheus recorder");
+
     let ort_config = ORTConfig {
         execution_providers: providers,
         intra_threads: args.intra_threads,
@@ -191,6 +199,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/parse", post(parse_document_handler))
+        .route("/metrics", get(move || std::future::ready(handle.render())))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
