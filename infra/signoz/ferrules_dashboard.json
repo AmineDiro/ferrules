@@ -1,0 +1,276 @@
+{
+    "title": "Ferrules Performance Dashboard",
+    "description": "Dashboard for Ferrules API performance metrics including OCR, Table, Layout, and Page processing times.",
+    "tags": [
+        "ferrules",
+        "pdf-parsing"
+    ],
+    "layout": [
+        {
+            "i": "page_duration",
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 6
+        },
+        {
+            "i": "layout_execution",
+            "x": 0,
+            "y": 6,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "layout_queue",
+            "x": 6,
+            "y": 6,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "ocr_execution",
+            "x": 0,
+            "y": 12,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "ocr_idle",
+            "x": 6,
+            "y": 12,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "table_execution",
+            "x": 0,
+            "y": 18,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "table_queue",
+            "x": 6,
+            "y": 18,
+            "w": 6,
+            "h": 6
+        },
+        {
+            "i": "native_execution",
+            "x": 0,
+            "y": 24,
+            "w": 12,
+            "h": 6
+        }
+    ],
+    "widgets": [
+        {
+            "id": "page_duration",
+            "title": "Page Processing Duration",
+            "description": "Total time to process a page (P50, P90, P99)",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"page_processing_duration_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.90, sum(rate({__name__=\"page_processing_duration_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P90"
+                    },
+                    {
+                        "name": "C",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"page_processing_duration_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "layout_execution",
+            "title": "Layout Execution Time",
+            "description": "Time spent executing layout analysis",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"layout_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"layout_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    },
+                    {
+                        "name": "C",
+                        "disabled": false,
+                        "query": "sum(rate({__name__=\"layout_execution_time_ms.sum\"}[5m])) / sum(rate({__name__=\"layout_execution_time_ms.count\"}[5m]))",
+                        "legend": "Avg"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "layout_queue",
+            "title": "Layout Queue Time",
+            "description": "Time spent waiting in layout queue",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"layout_queue_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"layout_queue_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "ocr_execution",
+            "title": "OCR Execution Time",
+            "description": "Time spent executing OCR",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"ocr_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"ocr_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    },
+                    {
+                        "name": "C",
+                        "disabled": false,
+                        "query": "sum(rate({__name__=\"ocr_execution_time_ms.sum\"}[5m])) / sum(rate({__name__=\"ocr_execution_time_ms.count\"}[5m]))",
+                        "legend": "Avg"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "ocr_idle",
+            "title": "OCR Idle Time",
+            "description": "Time OCR workers spent idle",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"ocr_idle_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "C",
+                        "disabled": false,
+                        "query": "sum(rate({__name__=\"ocr_idle_time_ms.sum\"}[5m])) / sum(rate({__name__=\"ocr_idle_time_ms.count\"}[5m]))",
+                        "legend": "Avg"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "table_execution",
+            "title": "Table Extraction Time",
+            "description": "Time spent extracting tables",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"table_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"table_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "table_queue",
+            "title": "Table Queue Time",
+            "description": "Time spent waiting for table extraction",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"table_queue_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"table_queue_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "native_execution",
+            "title": "Native Execution Time",
+            "description": "Time spent in native execution step",
+            "panelTypes": "graph",
+            "query": {
+                "queryType": "promql",
+                "promql": [
+                    {
+                        "name": "A",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.99, sum(rate({__name__=\"native_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P99"
+                    },
+                    {
+                        "name": "B",
+                        "disabled": false,
+                        "query": "histogram_quantile(0.50, sum(rate({__name__=\"native_execution_time_ms.bucket\"}[5m])) by (le))",
+                        "legend": "P50"
+                    },
+                    {
+                        "name": "C",
+                        "disabled": false,
+                        "query": "sum(rate({__name__=\"native_execution_time_ms.sum\"}[5m])) / sum(rate({__name__=\"native_execution_time_ms.count\"}[5m]))",
+                        "legend": "Avg"
+                    }
+                ]
+            }
+        }
+    ]
+}

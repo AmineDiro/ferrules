@@ -179,7 +179,15 @@ async fn main() {
     .expect("can't setup tracing for API");
 
     // Initialize Prometheus exporter
-    let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
+    let builder = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            metrics_exporter_prometheus::Matcher::Suffix("_ms".to_string()),
+            &[
+                0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0,
+                5000.0, 7500.0, 10000.0,
+            ],
+        )
+        .expect("failed to set buckets");
     let handle = builder
         .install_recorder()
         .expect("failed to install Prometheus recorder");
