@@ -12,6 +12,8 @@ use crate::metrics::StepMetrics;
 
 pub mod model;
 
+const CONCURRENT_LAYOUT_REQUESTS: usize = 32;
+
 #[derive(Debug)]
 pub struct Metadata {
     pub(crate) response_tx: oneshot::Sender<anyhow::Result<ParseLayoutResponse>>,
@@ -61,7 +63,7 @@ async fn start_layout_parser(
     layout_parser: Arc<ORTLayoutParser>,
     mut input_rx: Receiver<(ParseLayoutRequest, Span)>,
 ) {
-    let s = Arc::new(Semaphore::new(layout_parser.config.intra_threads));
+    let s = Arc::new(Semaphore::new(CONCURRENT_LAYOUT_REQUESTS));
     while let Some((req, span)) = input_rx.recv().await {
         let queue_time = req.metadata.queue_time.elapsed().as_secs_f64() * 1000.0;
         let page_id = req.page_id;

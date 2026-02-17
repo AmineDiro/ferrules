@@ -33,8 +33,8 @@ const MAX_SIZE_LIMIT: usize = 250 * 1024 * 1024;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// OpenTelemetry collector endpoint
-    #[arg(long, env = "OTLP_ENDPOINT", default_value = "http://localhost:4317")]
-    otlp_endpoint: String,
+    #[arg(long, env = "OTLP_ENDPOINT")]
+    otlp_endpoint: Option<String>,
 
     /// Sentry DSN
     #[arg(long, env = "SENTRY_DSN")]
@@ -171,7 +171,7 @@ async fn main() {
     };
 
     init_tracing(
-        Some(&args.otlp_endpoint),
+        args.otlp_endpoint.as_deref(),
         "ferrules-api".into(),
         false,
         use_sentry,
