@@ -13,6 +13,7 @@ pub fn init_tracing(
     json_output: bool,
     use_sentry: bool,
 ) -> anyhow::Result<()> {
+    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
     let mut layers = Vec::new();
 
     let fmt_layer = tracing_subscriber::fmt::layer()
@@ -53,7 +54,7 @@ pub fn init_tracing(
     // Env filter for all
     let env_filter = EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| {
         EnvFilter::new(
-            "ferrules_api=debug,ferrules_core=debug,axum_tracing_opentelemetry=info,otel=debug",
+            "ferrules_api=debug,ferrules_core=debug,axum_tracing_opentelemetry=info,otel=debug,opentelemetry=debug,tonic=debug,h2=info",
         )
     });
     tracing_subscriber::registry()

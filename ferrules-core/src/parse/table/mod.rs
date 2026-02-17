@@ -121,7 +121,7 @@ async fn handle_table_request(
         )
         .await;
     let inference_duration = start.elapsed().as_millis();
-    tracing::debug!("table inference time for page {page_id} took: {inference_duration} ms");
+    tracing::debug!("table inference time for page {page_id} took: {inference_duration}ms");
 
     drop(_permit);
 
@@ -208,7 +208,7 @@ impl TableParser {
         false
     }
 
-    #[tracing::instrument(name="table_parse",skip(self, lines, paths, page_image), fields(page_id = %page_id, table_bbox = ?table_bbox))]
+    #[tracing::instrument(name="table_parse",skip(self, lines, paths, page_image), fields(downscale_factor = downscale_factor, page_id = page_id, table_bbox = ?table_bbox))]
     pub async fn parse(
         &self,
         page_id: PageID,

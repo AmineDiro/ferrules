@@ -73,6 +73,7 @@ async fn start_layout_parser(
     }
 }
 
+#[tracing::instrument(name = "layout_parse", skip_all, fields(page_id = req.page_id, downscale_factor = req.downscale_factor))]
 async fn handle_request(
     s: Arc<Semaphore>,
     parser: Arc<ORTLayoutParser>,
@@ -96,7 +97,7 @@ async fn handle_request(
         .await;
     let inference_duration = start.elapsed().as_millis();
     drop(_permit);
-    tracing::debug!("layout inference time for page {page_id} took: {inference_duration} ms");
+    tracing::debug!("layout inference time for page {page_id} took: {inference_duration}ms");
 
     let layout_result = layout_result.map(|l| ParseLayoutResponse {
         page_id,

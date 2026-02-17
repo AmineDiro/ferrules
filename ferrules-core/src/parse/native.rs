@@ -181,11 +181,7 @@ pub(crate) fn parse_page_native(
     let text_lines = parse_text_lines(text_spans);
 
     let parse_native_duration_ms = start_time.elapsed().as_millis();
-    tracing::debug!(
-        "Parsing page {} using pdfium took {}ms",
-        page_id,
-        parse_native_duration_ms
-    );
+    tracing::debug!("pdfium parsing for page {page_id} took: {parse_native_duration_ms}ms");
     Ok(ParseNativePageResult {
         page_id,
         text_lines,
