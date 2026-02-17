@@ -54,7 +54,7 @@ impl OCRQueue {
         self.queue
             .send((req, span))
             .await
-            .map_err(|_| FerrulesError::LayoutParsingError) // TODO: Specific OCR error
+            .map_err(|e| FerrulesError::OcrError(format!("OCR queue send error: {}", e)))
     }
 }
 
@@ -101,7 +101,9 @@ async fn handle_ocr_request(
         })
         .await;
 
-    let ocr_result = rx.await.unwrap_or(Err(FerrulesError::LayoutParsingError));
+    let ocr_result = rx.await.unwrap_or(Err(FerrulesError::OcrError(
+        "OCR channel closed".to_string(),
+    )));
     let execution_time_ms = start.elapsed().as_secs_f64() * 1000.0;
     drop(_permit);
 
@@ -172,16 +174,17 @@ impl BatchOCRRunner {
 
             let results = tokio::task::spawn_blocking(move || parse_images_ocr_batch(images))
                 .await
-                .unwrap_or_else(|_| {
+                .unwrap_or_else(|e| {
+                    tracing::error!("OCR Batch Task Panicked: {:?}", e);
                     let mut errs = Vec::with_capacity(batch_size);
                     for _ in 0..batch_size {
-                        errs.push(Err(anyhow::anyhow!("OCR Batch Panic")));
+                        errs.push(Err(anyhow::anyhow!("OCR Batch Panic: {:?}", e)));
                     }
                     errs
                 });
 
             for (tx, res) in restxs.into_iter().zip(results) {
-                let _ = tx.send(res.map_err(|_| FerrulesError::LayoutParsingError));
+                let _ = tx.send(res.map_err(|e| FerrulesError::OcrError(e.to_string())));
             }
         }
     }
@@ -214,7 +217,9 @@ impl OCRParser {
                 response_tx: tx,
             })
             .await;
-        rx.await.unwrap_or(Err(FerrulesError::LayoutParsingError))
+        rx.await.unwrap_or(Err(FerrulesError::OcrError(
+            "OCR channel closed".to_string(),
+        )))
     }
 }
 
@@ -249,7 +254,7 @@ pub async fn parse_image_ocr(
 ) -> Result<(Vec<OCRLines>, StepMetrics), FerrulesError> {
     let start = Instant::now();
     let ocr_result = parse_single_image_ocr(image, rescale_factor)
-        .map_err(|_| FerrulesError::LayoutParsingError)?;
+        .map_err(|e| FerrulesError::OcrError(format!("OCR execution error: {}", e)))?;
     let execution_time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let step_metrics = StepMetrics {
@@ -283,15 +288,27 @@ mod ocr_mac {
         let bw = bbox.size.width as f32;
         let bh = bbox.size.height as f32;
 
-        let x0 = bx0 * img_width as f32;
-        let y1 = (1f32 - by0) * (img_height as f32);
-        let x1 = x0 + bw * (img_width as f32);
-        let y0 = y1 - bh * (img_height as f32);
+        let x0 = (bx0 * img_width as f32).clamp(0.0, img_width as f32);
+        let y1 = ((1f32 - by0) * (img_height as f32)).clamp(0.0, img_height as f32);
+        let x1 = (x0 + bw * (img_width as f32)).clamp(0.0, img_width as f32);
+        let y0 = (y1 - bh * (img_height as f32)).clamp(0.0, img_height as f32);
 
-        assert!(x0 < x1);
-        assert!(y0 < y1);
-        assert!(x1 < img_width as f32);
-        assert!(y1 < img_height as f32);
+        if x1 <= x0 || y1 <= y0 {
+            // Return a minimal valid box if it's too small, rather than crashing
+            tracing::warn!(
+                "Vision returned invalid or zero-size bbox: [{}, {}, {}, {}]",
+                x0,
+                y0,
+                x1,
+                y1
+            );
+            return BBox {
+                x0: x0 * downscale_factor,
+                y0: y0 * downscale_factor,
+                x1: (x0 + 1.0) * downscale_factor,
+                y1: (y0 + 1.0) * downscale_factor,
+            };
+        }
 
         BBox {
             x0: x0 * downscale_factor,
@@ -356,7 +373,8 @@ mod ocr_mac {
                 let h = inputs[i].0.height() as f64 / total_height as f64;
                 // Vision ROI is [x, y, w, h] in normalized coords (0,0 is bottom-left)
                 // Since we stitched top-to-bottom, we need to flip Y
-                let roi_y = 1.0 - y0 - h;
+                let roi_y = (1.0 - y0 - h).clamp(0.0, 1.0);
+                let h = h.clamp(0.0, 1.0 - roi_y);
                 request.setRegionOfInterest(objc2_foundation::CGRect {
                     origin: objc2_foundation::CGPoint { x: 0.0, y: roi_y },
                     size: objc2_foundation::CGSize {
@@ -560,7 +578,7 @@ mod ocr_mac {
                 let mut set = tokio::task::JoinSet::new();
 
                 let start = Instant::now();
-                for i in 0..n {
+                for _i in 0..n {
                     let img = image.clone();
                     let p = parser.clone();
                     set.spawn(async move { p.parse(&img, 1.0).await });

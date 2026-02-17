@@ -93,8 +93,14 @@ async fn parse_page_text(
 
         let res = rx
             .await
-            .map_err(|_| FerrulesError::LayoutParsingError)? // TODO: OCR error
-            .map_err(|_| FerrulesError::LayoutParsingError)?;
+            .map_err(|e| {
+                tracing::error!("OCR channel receive error: {:?}", e);
+                FerrulesError::OcrError(format!("OCR channel error: {}", e))
+            })?
+            .map_err(|e| {
+                tracing::error!("OCR execution error: {:?}", e);
+                e
+            })?;
 
         (Some(res.ocr_lines), Some(res.step_metrics))
     } else {
@@ -168,8 +174,14 @@ pub async fn parse_page_full(
     } = layout_rx
         .await
         // TODO: better unwrapping
-        .map_err(|_| FerrulesError::LayoutParsingError)?
-        .map_err(|_| FerrulesError::LayoutParsingError)?;
+        .map_err(|e| {
+            tracing::error!("Layout channel receive error: {:?}", e);
+            FerrulesError::LayoutParsingError
+        })?
+        .map_err(|e| {
+            tracing::error!("Layout model execution error: {:?}", e);
+            FerrulesError::LayoutParsingError
+        })?;
     tracing::debug!("Layout response received");
 
     let native_lines_captured = text_lines.clone();

@@ -134,7 +134,11 @@ impl BatchInferenceRunner {
                     Err(e) => {
                         tracing::error!("Failed to spawn blocking for f16 conversion: {}", e);
                         for req in batch.drain(..) {
-                            let _ = req.response_tx.send(Err(FerrulesError::LayoutParsingError));
+                            let _ = req.response_tx.send(Err(
+                                FerrulesError::TableTransformerModelError(
+                                    "Failed to spawn blocking for f16 conversion".to_string(),
+                                ),
+                            ));
                         }
                         continue;
                     }
@@ -319,9 +323,19 @@ impl TableTransformer {
                 response_tx: tx,
             })
             .await
-            .map_err(|_| FerrulesError::LayoutParsingError)?;
+            .map_err(|e| {
+                FerrulesError::TableTransformerModelError(format!(
+                    "Table transformer queue send error: {}",
+                    e
+                ))
+            })?;
 
-        rx.await.map_err(|_| FerrulesError::LayoutParsingError)?
+        rx.await.map_err(|e| {
+            FerrulesError::TableTransformerModelError(format!(
+                "Table transformer channel closed: {}",
+                e
+            ))
+        })?
     }
 
     /// Decode the DETR-style output from the Table Transformer.

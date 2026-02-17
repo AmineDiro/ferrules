@@ -55,7 +55,7 @@ impl ParseLayoutQueue {
         self.queue
             .send((req, span))
             .await
-            .map_err(|_| FerrulesError::LayoutParsingError)
+            .map_err(|_| FerrulesError::LayoutParsingError) // We keep LayoutParsingError for layout itself, but we can add more context later if needed.
     }
 }
 
@@ -110,8 +110,9 @@ async fn handle_request(
             idle_time_ms,
         },
     });
-    metadata
-        .response_tx
-        .send(layout_result)
-        .expect("can't send parsed result over oneshot chan");
+    if let Err(e) = layout_result.as_ref() {
+        tracing::error!("Layout parsing failed for page {page_id}: {:?}", e);
+    }
+
+    let _ = metadata.response_tx.send(layout_result);
 }

@@ -493,6 +493,20 @@ async fn main() {
                         ],
                     );
                 }
+                ferrules_core::error::FerrulesError::OcrError(e) => {
+                    format_error(
+                        "OCR Extraction Failed",
+                        "Failed to extract text using OCR.",
+                        vec![
+                            ("Error", e),
+                            ("File", args.file_path.display().to_string()),
+                            (
+                                "Suggestion",
+                                "This might indicate an issue with Apple Vision or stitched image size".to_string(),
+                            ),
+                        ],
+                    );
+                }
             }
             std::process::exit(1);
         }

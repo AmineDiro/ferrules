@@ -391,6 +391,15 @@ impl ORTLayoutParser {
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap();
 
+            if proba.is_nan() {
+                tracing::warn!(
+                    "Found NaN probability for label {} at idx {}",
+                    ID2LABEL[max_prob_idx],
+                    bbox_id
+                );
+                continue;
+            }
+
             if proba < Self::CONF_THRESHOLD {
                 continue;
             }
@@ -524,7 +533,11 @@ impl ORTLayoutParser {
 
 /// runs nms on without taking into account which class
 pub(crate) fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
-    raw_bboxes.sort_by(|r1, r2| r2.proba.partial_cmp(&r1.proba).unwrap());
+    raw_bboxes.sort_by(|r1, r2| {
+        r2.proba
+            .partial_cmp(&r1.proba)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut current_index = 0;
     for index in 0..raw_bboxes.len() {
         let mut drop = false;

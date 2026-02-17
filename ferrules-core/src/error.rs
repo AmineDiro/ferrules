@@ -29,4 +29,6 @@ pub enum FerrulesError {
     TableTransformerModelError(String),
     #[error("table parser error: {0}")]
     TableParserError(String),
+    #[error("ocr parser error: {0}")]
+    OcrError(String),
 }
