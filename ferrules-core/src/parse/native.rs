@@ -65,6 +65,7 @@ pub struct ParseNativeRequest {
     pub required_raster_width: u32,
     pub required_raster_height: u32,
     pub sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+    pub queue_time: Instant,
 }
 impl ParseNativeRequest {
     pub fn new(
@@ -83,13 +84,14 @@ impl ParseNativeRequest {
             required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
+            queue_time: Instant::now(),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct ParseNativeMetadata {
-    pub parse_native_duration_ms: u128,
+    pub parse_native_duration_ms: f64,
 }
 
 #[derive(Debug)]
@@ -180,7 +182,7 @@ pub(crate) fn parse_page_native(
 
     let text_lines = parse_text_lines(text_spans);
 
-    let parse_native_duration_ms = start_time.elapsed().as_millis();
+    let parse_native_duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     tracing::debug!("pdfium parsing for page {page_id} took: {parse_native_duration_ms}ms");
     Ok(ParseNativePageResult {
         page_id,
@@ -265,6 +267,7 @@ fn handle_parse_native_req(
         required_raster_width,
         required_raster_height,
         sender_tx,
+        queue_time: _,
     } = req;
     let mut document = pdfium
         .load_pdf_from_byte_slice(&doc_data, password.as_deref())
@@ -298,6 +301,8 @@ pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
         Pdfium::bind_to_statically_linked_library().expect("can't load pdfiurm bindings"),
     );
     while let Some((req, parent_span)) = input_rx.blocking_recv() {
+        let queue_duration = req.queue_time.elapsed();
+        tracing::debug!(parent: &parent_span, "Native request dequeued after {:?} in queue", queue_duration);
         match handle_parse_native_req(&pdfium, req, parent_span) {
             Ok(_) => {}
             Err(e) => eprintln!("error parsing request natively : {:?}", e),

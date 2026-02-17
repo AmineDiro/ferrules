@@ -46,12 +46,12 @@ pub async fn parse_image_ocr(
     let start = Instant::now();
     let ocr_result = parse_image_ocr_inner(image, rescale_factor)
         .map_err(|_| FerrulesError::LayoutParsingError)?; // TODO: Add specific OCR error variant
-    let execution_time_ms = start.elapsed().as_millis();
+    let execution_time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let step_metrics = StepMetrics {
-        queue_time_ms: 0,
+        queue_time_ms: 0.0,
         execution_time_ms,
-        idle_time_ms: 0,
+        idle_time_ms: 0.0,
     };
 
     Ok((ocr_result, step_metrics))

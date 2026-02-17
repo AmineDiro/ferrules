@@ -16,7 +16,7 @@ use crate::{
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
-    metrics::{OCRMetrics, PageMetrics, StepMetrics},
+    metrics::{OCRMetrics, PageMetrics, StepMetrics, TableMetrics},
     ocr::parse_image_ocr,
     parse::table::ParseTableQueue,
 };
@@ -94,7 +94,7 @@ async fn parse_page_text(
         );
         match res {
             Ok((lines, mut metrics)) => {
-                metrics.idle_time_ms = wait_duration.as_millis();
+                metrics.idle_time_ms = wait_duration.as_secs_f64() * 1000.0;
                 (Some(lines), Some(metrics))
             }
             Err(_) => (None, None),
@@ -121,9 +121,11 @@ async fn parse_page_text(
     skip_all,
     fields(
         layout_queue_time_ms,
-        layout_parse_duration_ms,
+        layout_idle_time_ms,
         layout_parse_duration_ms,
         parse_native_duration_ms,
+        ocr_idle_time_ms,
+        ocr_parse_duration_ms,
         table_queue_time_ms,
         table_parse_duration_ms,
     )
@@ -158,9 +160,10 @@ pub async fn parse_page_full(
         },
     };
     layout_queue.push(layout_req).await?;
+    tracing::debug!("Layout request pushed to queue");
 
     let ParseLayoutResponse {
-        page_id: _,
+        _page_id: _, // TODO: remove page_id from ParseLayoutResponse
         layout_bbox: page_layout,
         step_metrics: layout_step_metrics,
     } = layout_rx
@@ -168,6 +171,7 @@ pub async fn parse_page_full(
         // TODO: better unwrapping
         .map_err(|_| FerrulesError::LayoutParsingError)?
         .map_err(|_| FerrulesError::LayoutParsingError)?;
+    tracing::debug!("Layout response received");
 
     let native_lines_captured = text_lines.clone();
     let (text_lines_processed, ocr_step_metrics_inner, need_ocr) = parse_page_text(
@@ -190,8 +194,6 @@ pub async fn parse_page_full(
 
     // Table parsing
     let mut set = JoinSet::new();
-    let mut total_table_parse_duration = 0;
-    let mut total_table_queue_time = 0;
     for (idx, element) in elements.iter().enumerate() {
         if matches!(element.kind, ElementType::Table(_)) {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -208,25 +210,24 @@ pub async fn parse_page_full(
                 },
             };
             table_queue.push(req).await?;
+            tracing::debug!("Table request pushed to queue for table {}", idx);
             set.spawn(async move { (idx, rx.await) });
         }
     }
 
+    let mut table_steps = Vec::new();
     while let Some(res) = set.join_next().await {
         if let Ok((idx, Ok(Ok(resp)))) = res {
             if let ElementType::Table(ref mut table_opt) = elements[idx].kind {
+                let algorithm = resp.table_block.algorithm.clone();
                 *table_opt = Some(resp.table_block);
-                total_table_parse_duration += resp.step_metrics.execution_time_ms;
-                total_table_queue_time += resp.step_metrics.queue_time_ms;
+                table_steps.push(TableMetrics {
+                    step_metrics: resp.step_metrics,
+                    algorithm,
+                });
             }
         }
     }
-
-    let table_step_metrics = StepMetrics {
-        queue_time_ms: total_table_queue_time,
-        execution_time_ms: total_table_parse_duration,
-        idle_time_ms: 0, // Should also sum idle time if available, but let's stick to what we have or update loop
-    };
     if let Some(tmp_dir) = debug_dir {
         debug_page(
             &tmp_dir,
@@ -240,14 +241,14 @@ pub async fn parse_page_full(
         )?
     };
 
-    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms);
+    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms as f64);
 
     let page_metrics = PageMetrics {
         page_id,
-        total_duration_ms: start_time.elapsed().as_millis(),
+        total_duration_ms: start_time.elapsed().as_secs_f64() * 1000.0,
         native_step,
         layout_step: layout_step_metrics,
-        table_step: table_step_metrics,
+        table_steps,
         ocr_step: ocr_step_metrics,
     };
 

@@ -204,7 +204,7 @@ impl FerrulesParser {
         let duration = start_time.elapsed();
 
         let parsing_metrics = ParsingMetrics {
-            total_duration_ms: duration.as_millis(),
+            total_duration_ms: duration.as_secs_f64() * 1000.0,
             pages: parsed_pages.iter().map(|p| p.metrics.clone()).collect(),
         };
 

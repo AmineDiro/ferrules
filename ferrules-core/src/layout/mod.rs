@@ -28,7 +28,7 @@ pub(crate) struct ParseLayoutRequest {
 
 #[derive(Debug)]
 pub(crate) struct ParseLayoutResponse {
-    pub(crate) page_id: PageID,
+    pub(crate) _page_id: PageID,
     pub(crate) layout_bbox: Vec<LayoutBBox>,
     pub(crate) step_metrics: StepMetrics,
 }
@@ -63,7 +63,7 @@ async fn start_layout_parser(
 ) {
     let s = Arc::new(Semaphore::new(layout_parser.config.intra_threads));
     while let Some((req, span)) = input_rx.recv().await {
-        let queue_time = req.metadata.queue_time.elapsed().as_millis();
+        let queue_time = req.metadata.queue_time.elapsed().as_secs_f64() * 1000.0;
         let page_id = req.page_id;
         tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
         let _guard = span.enter();
@@ -78,11 +78,11 @@ async fn handle_request(
     s: Arc<Semaphore>,
     parser: Arc<ORTLayoutParser>,
     req: ParseLayoutRequest,
-    layout_queue_time_ms: u128,
+    layout_queue_time_ms: f64,
 ) {
     let start_wait = Instant::now();
     let _permit = s.acquire().await.unwrap();
-    let idle_time_ms = start_wait.elapsed().as_millis();
+    let idle_time_ms = start_wait.elapsed().as_secs_f64() * 1000.0;
 
     let ParseLayoutRequest {
         page_id,
@@ -95,12 +95,12 @@ async fn handle_request(
     let layout_result = parser
         .parse_layout_async(&page_image, downscale_factor)
         .await;
-    let inference_duration = start.elapsed().as_millis();
+    let inference_duration = start.elapsed().as_secs_f64() * 1000.0;
     drop(_permit);
     tracing::debug!("layout inference time for page {page_id} took: {inference_duration}ms");
 
     let layout_result = layout_result.map(|l| ParseLayoutResponse {
-        page_id,
+        _page_id: page_id,
         layout_bbox: l,
         step_metrics: StepMetrics {
             queue_time_ms: layout_queue_time_ms,

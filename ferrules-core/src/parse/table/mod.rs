@@ -74,7 +74,7 @@ async fn start_table_parser(
     // TODO: make this configurable
     let s = Arc::new(Semaphore::new(TABLE_PARSER_CONCURRENCY));
     while let Some((req, span)) = input_rx.recv().await {
-        let queue_time = req.metadata.queue_time.elapsed().as_millis();
+        let queue_time = req.metadata.queue_time.elapsed().as_secs_f64() * 1000.0;
         let page_id = req.page_id;
         tracing::debug!("table request queue time for page {page_id} took: {queue_time}ms");
         tokio::spawn(
@@ -87,11 +87,11 @@ async fn handle_table_request(
     s: Arc<Semaphore>,
     _parser: Arc<TableParser>,
     req: ParseTableRequest,
-    table_queue_time_ms: u128,
+    table_queue_time_ms: f64,
 ) {
     let start_wait = Instant::now();
     let _permit = s.acquire().await.unwrap();
-    let idle_time_ms = start_wait.elapsed().as_millis();
+    let idle_time_ms = start_wait.elapsed().as_secs_f64() * 1000.0;
 
     let ParseTableRequest {
         page_id,
@@ -120,7 +120,7 @@ async fn handle_table_request(
             downscale_factor,
         )
         .await;
-    let inference_duration = start.elapsed().as_millis();
+    let inference_duration = start.elapsed().as_secs_f64() * 1000.0;
     tracing::debug!("table inference time for page {page_id} took: {inference_duration}ms");
 
     drop(_permit);
