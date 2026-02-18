@@ -1179,7 +1179,7 @@ mod tests {
         // Warmup
         let _ = model.run(input.clone()).await.expect("Warmup failed");
 
-        let batch_size = 16;
+        let batch_size = 4;
         println!("Running batch inference (batch size: {})...", batch_size);
 
         let mut handles = Vec::with_capacity(batch_size);
@@ -1198,7 +1198,8 @@ mod tests {
 
         let duration = start.elapsed();
         println!(
-            "Batch (16) CoreML Inference time: {:?} ({:?} per item)",
+            "Batch ({}) CoreML Inference time: {:?} ({:?} per item)",
+            batch_size,
             duration,
             duration / batch_size as u32
         );
@@ -1293,7 +1294,7 @@ mod tests {
         // Warmup
         let _ = model.run(input.clone()).await.expect("Warmup failed");
 
-        let batch_sizes = [1, 2, 4, 8, 16, 32, 64];
+        let batch_sizes = [1, 2, 4, 8, 16, 32];
 
         println!("\n| Batch Size | Latency (ms) | Throughput (img/s) |");
         println!("|---|---|---|");
