@@ -132,7 +132,7 @@ impl Block {
                     Ok(())
                 } else {
                     Err(FerrulesError::BlockMergeError {
-                        element,
+                        element: Box::new(element),
                         block_id: self.id,
                         kind: self.kind.clone(),
                     })
@@ -146,7 +146,7 @@ impl Block {
                     Ok(())
                 } else {
                     Err(FerrulesError::BlockMergeError {
-                        element,
+                        element: Box::new(element),
                         block_id: self.id,
                         kind: self.kind.clone(),
                     })
@@ -159,7 +159,7 @@ impl Block {
                     Ok(())
                 } else {
                     Err(FerrulesError::BlockMergeError {
-                        element,
+                        element: Box::new(element),
                         block_id: self.id,
                         kind: self.kind.clone(),
                     })
@@ -172,7 +172,7 @@ impl Block {
                     Ok(())
                 } else {
                     Err(FerrulesError::BlockMergeError {
-                        element,
+                        element: Box::new(element),
                         block_id: self.id,
                         kind: self.kind.clone(),
                     })
@@ -189,7 +189,7 @@ impl Block {
                     Ok(())
                 } else {
                     Err(FerrulesError::BlockMergeError {
-                        element,
+                        element: Box::new(element),
                         block_id: self.id,
                         kind: self.kind.clone(),
                     })

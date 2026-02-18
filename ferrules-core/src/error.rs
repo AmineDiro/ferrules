@@ -19,7 +19,7 @@ pub enum FerrulesError {
     BlockMergeError {
         block_id: usize,
         kind: BlockType,
-        element: Element,
+        element: Box<Element>,
     },
     #[error("saving error page number {page_idx} in :{tmp_dir:?}")]
     DebugPageError { tmp_dir: PathBuf, page_idx: PageID },
