@@ -9,7 +9,7 @@ def benchmark(model_path, provider, iterations=50, warmups=5):
     
     sess_options = ort.SessionOptions()
     sess_options.log_severity_level = 0
-    sess_options.log_verbosity_level = 1
+    sess_options.log_verbosity_level = 3
     
     # Provider options for CoreML
     provider_options = {}
@@ -152,7 +152,7 @@ def benchmark(model_path, provider, iterations=50, warmups=5, session=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="models/table-transformer-structure-recognition-ane.onnx")
-    parser.add_argument("--iterations", type=int, default=50)
+    parser.add_argument("--iterations", type=int, default=20)
     args = parser.parse_args()
     
     benchmark_all(args.model, iterations=args.iterations)

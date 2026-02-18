@@ -18,18 +18,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 class LayerNormANE(nn.Module):
     def __init__(self, num_channels, eps=1e-5):
         super().__init__()
-        self.num_channels = num_channels
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(1, num_channels, 1, 1))
-        self.bias = nn.Parameter(torch.zeros(1, num_channels, 1, 1))
+        self.gn = nn.GroupNorm(1, num_channels, eps=eps)
 
     def forward(self, x):
-        # Normalize across the channel dimension (dim 1)
-        mean = x.mean(dim=1, keepdim=True)
-        zero_mean = x - mean
-        var = (zero_mean ** 2).mean(dim=1, keepdim=True)
-        denom = (var + self.eps).rsqrt()
-        return (zero_mean * denom) * self.weight + self.bias
+        # x is (B, C, 1, S) or similar rank-4
+        # GroupNorm(1, C) is equivalent to LayerNorm over C, H, W
+        return self.gn(x)
 
 class ANEOptimizedAttention(nn.Module):
     def __init__(self, embed_dim, n_heads, dropout=0.0):
@@ -54,27 +48,29 @@ class ANEOptimizedAttention(nn.Module):
         k = self.k_proj(key)
         v = self.v_proj(value)
 
-        # Vectorized Multi-Head Attention (3D MatMul is faster in CoreML EP)
-        # (B, C, 1, S) -> (B*H, head_dim, S)
-        qn = q.reshape(B * self.num_heads, self.head_dim, S_tgt)
-        kn = k.reshape(B * self.num_heads, self.head_dim, S_src).transpose(1, 2)
-        vn = v.reshape(B * self.num_heads, self.head_dim, S_src)
+        # Keep everything 4D for ANE
+        # qn: (BN, 1, head_dim, S_tgt)
+        # kn: (BN, 1, head_dim, S_src)
+        # vn: (BN, 1, head_dim, S_src)
+        qn = q.reshape(B * self.num_heads, 1, self.head_dim, S_tgt)
+        kn = k.reshape(B * self.num_heads, 1, self.head_dim, S_src)
+        vn = v.reshape(B * self.num_heads, 1, self.head_dim, S_src)
 
-        # (BN, S_src, head_dim) @ (BN, head_dim, S_tgt) -> (BN, S_src, S_tgt)
-        aw = torch.matmul(kn, qn) * self.scale
+        # (BN, 1, S_src, head_dim) @ (BN, 1, head_dim, S_tgt) -> (BN, 1, S_src, S_tgt)
+        aw = torch.matmul(kn.transpose(2, 3), qn) * self.scale
 
         if attn_mask is not None:
-            # attn_mask: (B, S_src, 1, S_tgt) -> (B*H, S_src, S_tgt)
-            m = attn_mask.reshape(B, S_src, S_tgt).unsqueeze(1).expand(B, self.num_heads, S_src, S_tgt)
-            aw = aw + m.reshape(B * self.num_heads, S_src, S_tgt)
+            # attn_mask: (B, S_src, 1, S_tgt) -> (B*H, 1, S_src, S_tgt)
+            m = attn_mask.reshape(B, 1, S_src, S_tgt).expand(B * self.num_heads, 1, S_src, S_tgt)
+            aw = aw + m
                 
-        aw = F.softmax(aw, dim=1)
+        aw = F.softmax(aw, dim=2) # Normalize across S_src (dim 2)
         aw = self.dropout(aw)
         
-        # (BN, head_dim, S_src) @ (BN, S_src, S_tgt) -> (BN, head_dim, S_tgt)
+        # (BN, 1, head_dim, S_src) @ (BN, 1, S_src, S_tgt) -> (BN, 1, head_dim, S_tgt)
         h = torch.matmul(vn, aw)
         
-        # (BN, head_dim, S_tgt) -> (B, C, 1, S_tgt)
+        # (BN, 1, head_dim, S_tgt) -> (B, C, 1, S_tgt)
         out = h.reshape(B, C, 1, S_tgt)
         return self.out_proj(out), None
 
@@ -156,8 +152,8 @@ class TableTransformerANE(nn.Module):
                 setattr(module, name, new_conv)
             elif isinstance(child, nn.LayerNorm):
                 new_ln = LayerNormANE(child.normalized_shape[0], eps=child.eps)
-                new_ln.weight.data = child.weight.data.view(1, -1, 1, 1)
-                new_ln.bias.data = child.bias.data.view(1, -1, 1, 1)
+                new_ln.gn.weight.data = child.weight.data
+                new_ln.gn.bias.data = child.bias.data
                 setattr(module, name, new_ln)
             elif "FrozenBatchNorm" in child.__class__.__name__:
                 new_bn = nn.BatchNorm2d(child.weight.shape[0], eps=child.eps)
@@ -264,20 +260,42 @@ class TableTransformerANE(nn.Module):
         DETROutput = namedtuple('DETROutput', ['logits', 'pred_boxes'])
         return DETROutput(logits=logits, pred_boxes=torch.sigmoid(pred_boxes))
 
+import argparse
+
 def main():
-    print(f"Loading model: {MODEL_NAME}")
-    original_hf_model = TableTransformerForObjectDetection.from_pretrained(MODEL_NAME)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for the exported model")
+    parser.add_argument("--model_name", type=str, default=MODEL_NAME, help="HuggingFace model name")
+    parser.add_argument("--output_name", type=str, default=None, help="Output base name")
+    args = parser.parse_args()
+
+    batch_size = args.batch_size
+    model_id = args.model_name
+    
+    if args.output_name:
+        base_output = args.output_name
+    else:
+        # e.g., table-transformer-structure-recognition-ane-b1
+        base_output = f"{model_id.split('/')[-1]}-ane-b{batch_size}"
+    
+    output_path = os.path.join(OUTPUT_DIR, f"{base_output}.onnx")
+    output_fp16_path = os.path.join(OUTPUT_DIR, f"{base_output}_fp16.onnx")
+
+    print(f"Loading model: {model_id}")
+    original_hf_model = TableTransformerForObjectDetection.from_pretrained(model_id)
     original_hf_model.eval()
     
-    print("Creating ANE optimized model...")
+    print(f"Creating ANE optimized model for batch size {batch_size}...")
     ane_model = TableTransformerANE(original_hf_model)
     ane_model.eval()
     
     print("Running parity test...")
-    dummy_input = torch.randn(1, 3, 1000, 1000)
-    pixel_mask = torch.ones((1, 1000, 1000))
+    dummy_input = torch.randn(batch_size, 3, 1000, 1000)
+    pixel_mask = torch.ones((batch_size, 1000, 1000))
     
     with torch.no_grad():
+        # original model might need special padding if not perfectly handled, 
+        # but let's assume it works for the parity check with dummy input
         original_output = original_hf_model(dummy_input, pixel_mask=pixel_mask)
         ane_output = ane_model(dummy_input)
         
@@ -291,32 +309,27 @@ def main():
     else:
         print(f"⚠️ Parity test warning: Differences too large (logits={logits_diff}, boxes={boxes_diff})")
 
-    print("Exporting to ONNX...")
+    print(f"Exporting to ONNX: {output_path}")
     torch.onnx.export(
         ane_model,
         dummy_input,
-        ANE_ONNX_PATH,
+        output_path,
         export_params=True,
         opset_version=15,
         do_constant_folding=True,
         input_names=["pixel_values"],
         output_names=["logits", "pred_boxes"],
-        # ANE prefers static shapes
-        dynamic_axes={
-            "pixel_values": {0: "batch_size"},
-            "logits": {0: "batch_size"},
-            "pred_boxes": {0: "batch_size"},
-        },
+        # ANE prefers static shapes, so we do NOT use dynamic_axes here for batch_size
     )
-    print(f"ANE Model exported to {ANE_ONNX_PATH}")
+    print(f"ANE Model exported to {output_path}")
 
     print("Converting to FP16...")
     try:
         from onnxconverter_common import float16
-        onnx_model = onnx.load(ANE_ONNX_PATH)
-        model_fp16 = float16.convert_float_to_float16(onnx_model)
-        onnx.save(model_fp16, ANE_FP16_ONNX_PATH)
-        print(f"FP16 ANE Model saved to {ANE_FP16_ONNX_PATH}")
+        onnx_model = onnx.load(output_path)
+        model_fp16 = float16.convert_float_to_float16(onnx_model, keep_io_types=True)
+        onnx.save(model_fp16, output_fp16_path)
+        print(f"FP16 ANE Model saved to {output_fp16_path}")
     except ImportError:
         print("onnxconverter_common not found, skipping FP16 conversion.")
 

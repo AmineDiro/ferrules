@@ -23,7 +23,7 @@ pub const TABLE_MODEL_BYTES: &[u8] =
     include_bytes!("../../../../models/table-transformer-structure-recognition_fp16.onnx");
 
 pub const TABLE_MODEL_ANE_BYTES: &[u8] =
-    include_bytes!("../../../../models/table-transformer-structure-recognition-ane_fp16.onnx");
+    include_bytes!("../../../../models/table-transformer-structure-recognition-ane-b4.onnx");
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -42,20 +42,22 @@ struct BatchInferenceRunner {
     rx: mpsc::Receiver<InferenceRequest>,
     max_batch_size: usize,
     batch_timeout: Duration,
+    is_fp16: bool,
 }
 
 impl BatchInferenceRunner {
     /// maximum batch size for the table transformer to process
-    const MAX_BATCH_SIZE: usize = 16;
+    const MAX_BATCH_SIZE: usize = 4;
     /// maximum time to wait for a batch to be filled
-    const BATCH_TIMEOUT: Duration = Duration::from_millis(100);
+    const BATCH_TIMEOUT: Duration = Duration::from_millis(50);
 
-    fn new(session: Session, rx: mpsc::Receiver<InferenceRequest>) -> Self {
+    fn new(session: Session, rx: mpsc::Receiver<InferenceRequest>, is_fp16: bool) -> Self {
         Self {
             session: Arc::new(session),
             rx,
             max_batch_size: Self::MAX_BATCH_SIZE,
             batch_timeout: Self::BATCH_TIMEOUT,
+            is_fp16,
         }
     }
 
@@ -108,7 +110,8 @@ impl BatchInferenceRunner {
 
             // Pad inputs to max_h, max_w
             // Input is [1, 3, h, w]
-            let mut batch_input_vec = Vec::with_capacity(current_batch_size);
+            // Stack along axis 0 -> [N, 3, max_h, max_w]
+            let mut batch_input_vec = Vec::with_capacity(self.max_batch_size);
             for req in &batch {
                 let mut padded = Array4::<f32>::zeros((1, 3, max_h, max_w));
                 let (_, _, h, w) = req.input.dim();
@@ -116,7 +119,11 @@ impl BatchInferenceRunner {
                 batch_input_vec.push(padded.remove_axis(Axis(0))); // [3, max_h, max_w]
             }
 
-            // Stack along axis 0 -> [N, 3, max_h, max_w]
+            // Pad to max_batch_size for static shape models (like ANE)
+            for _ in current_batch_size..self.max_batch_size {
+                batch_input_vec.push(ndarray::Array3::<f32>::zeros((3, max_h, max_w)));
+            }
+
             let batch_input_views: Vec<_> = batch_input_vec.iter().map(|a| a.view()).collect();
             let batch_tensor =
                 match stack(Axis(0), &batch_input_views) {
@@ -137,35 +144,31 @@ impl BatchInferenceRunner {
 
             // 3. Run Inference (Async)
             let run_start = tokio::time::Instant::now();
-            let input_f16 =
-                match tokio::task::spawn_blocking(move || batch_tensor.mapv(half::f16::from_f32))
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::error!("Failed to spawn blocking for f16 conversion: {}", e);
-                        for req in batch.drain(..) {
-                            let _ = req.response_tx.send(Err(
-                                FerrulesError::TableTransformerModelError(
-                                    "Failed to spawn blocking for f16 conversion".to_string(),
-                                ),
-                            ));
-                        }
-                        continue;
-                    }
-                };
-
             let run_result = async {
-                let outputs = self.session.run_async(ort::inputs![input_f16]?)?.await?;
-                let logits = outputs["logits"]
-                    .try_extract_tensor::<half::f16>()?
-                    .mapv(|x| x.to_f32())
-                    .into_dyn();
-                let boxes = outputs["pred_boxes"]
-                    .try_extract_tensor::<half::f16>()?
-                    .mapv(|x| x.to_f32())
-                    .into_dyn();
-                Ok::<_, ort::Error>((logits, boxes))
+                if self.is_fp16 {
+                    let input_f16 = batch_tensor.mapv(half::f16::from_f32);
+                    let outputs = self.session.run_async(ort::inputs![input_f16]?)?.await?;
+                    let logits = outputs["logits"]
+                        .try_extract_tensor::<half::f16>()?
+                        .mapv(|x| x.to_f32())
+                        .into_dyn();
+                    let boxes = outputs["pred_boxes"]
+                        .try_extract_tensor::<half::f16>()?
+                        .mapv(|x| x.to_f32())
+                        .into_dyn();
+                    Ok::<_, ort::Error>((logits, boxes))
+                } else {
+                    let outputs = self.session.run_async(ort::inputs![batch_tensor]?)?.await?;
+                    let logits = outputs["logits"]
+                        .try_extract_tensor::<f32>()?
+                        .to_owned()
+                        .into_dyn();
+                    let boxes = outputs["pred_boxes"]
+                        .try_extract_tensor::<f32>()?
+                        .to_owned()
+                        .into_dyn();
+                    Ok::<_, ort::Error>((logits, boxes))
+                }
             }
             .await;
 
@@ -306,7 +309,7 @@ impl TableTransformerStandard {
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
 
         let (tx, rx) = mpsc::channel(32);
-        let runner = BatchInferenceRunner::new(session, rx);
+        let runner = BatchInferenceRunner::new(session, rx, true);
         tokio::spawn(runner.run());
 
         Ok(Self { tx })
@@ -722,7 +725,7 @@ impl TableTransformer {
             .map_err(|e| FerrulesError::TableTransformerModelError(e.to_string()))?;
 
         let (tx, rx) = mpsc::channel(32);
-        let runner = BatchInferenceRunner::new(session, rx);
+        let runner = BatchInferenceRunner::new(session, rx, false);
         tokio::spawn(runner.run());
 
         Ok(Self { tx })
