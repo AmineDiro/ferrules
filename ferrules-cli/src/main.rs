@@ -80,7 +80,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = true,
+        default_value_t = false,
         help = "Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)"
     )]
     use_ane: bool,
