@@ -1,6 +1,6 @@
 [package]
 name = "ferrules"
-version = "0.1.9"
+version = "0.1.11"
 edition = "2021"
 authors = ["Amine dirhoussi <aminedirhoussi1@gmail.com>"]
 description = "Modern, fast, document parser written in 🦀"

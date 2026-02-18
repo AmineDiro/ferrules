@@ -1,6 +1,6 @@
 [package]
 name = "ferrules-core"
-version = "0.1.9"
+version = "0.1.11"
 edition = "2021"
 repository = "https://github.com/aminediro/ferrules"
 
