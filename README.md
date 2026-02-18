@@ -111,11 +111,11 @@ Running with `--debug` will generate:
 
 </div>
 
-<div align="center">
+<p align="center">
+  <video src="https://github.com/AmineDiro/ferrules/raw/main/imgs/ferrules_debugger_v2.mp4" width="100%" controls muted autoplay loop></video>
+</p>
 
-![Visual Debugger Demo](imgs/ferrules_debugger_v2.mp4)
 
-</div>
 
 
 
