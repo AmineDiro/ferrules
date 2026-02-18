@@ -112,8 +112,12 @@ Running with `--debug` will generate:
 </div>
 
 <div align="center">
-  <video src="./imgs/ferrules_debugger_v2.mp4" width="100%" controls muted autoplay loop></video>
+
+![Visual Debugger Demo](imgs/ferrules_debugger_v2.mp4)
+
 </div>
+
+
 
 **How to use:**
 1. Run the parser with the debug flag: `ferrules sample.pdf --debug`
