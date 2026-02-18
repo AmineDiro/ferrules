@@ -110,6 +110,11 @@ Running with `--debug` will generate:
 | <img src="./imgs/ferrules_debug_simple.png" alt="Ferrules Debug Simple" height="350"> | <img src="./imgs/ferrules_debug_table_cells.png" alt="Ferrules Debug Table Cells" height="350"> |
 
 </div>
+
+<div align="center">
+  <video src="./imgs/ferrules_debugger_v2.mp4" width="100%" controls muted autoplay loop></video>
+</div>
+
 **How to use:**
 1. Run the parser with the debug flag: `ferrules sample.pdf --debug`
 2. Open the resulting `.ferr` file: `ferrules-debug --file path/to/sample.ferr`
