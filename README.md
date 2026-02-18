@@ -112,7 +112,7 @@ Running with `--debug` will generate:
 </div>
 
 <p align="center">
-  <video src="https://github.com/AmineDiro/ferrules/raw/main/imgs/ferrules_debugger_v2.mp4" width="100%" controls muted autoplay loop></video>
+  <video src="https://github.com/user-attachments/assets/d3b13807-98ea-404d-9b93-75158f25bee9" width="100%" controls muted autoplay loop></video>
 </p>
 
 
