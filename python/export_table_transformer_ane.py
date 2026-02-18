@@ -18,16 +18,18 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 class LayerNormANE(nn.Module):
     def __init__(self, num_channels, eps=1e-5):
         super().__init__()
+        self.num_channels = num_channels
+        self.eps = eps
         self.weight = nn.Parameter(torch.ones(1, num_channels, 1, 1))
         self.bias = nn.Parameter(torch.zeros(1, num_channels, 1, 1))
-        self.eps = eps
 
     def forward(self, x):
+        # Normalize across the channel dimension (dim 1)
         mean = x.mean(dim=1, keepdim=True)
-        var = ((x - mean) ** 2).mean(dim=1, keepdim=True)
-        std = (var + self.eps).sqrt()
-        y = (x - mean) / std
-        return y * self.weight + self.bias
+        zero_mean = x - mean
+        var = (zero_mean ** 2).mean(dim=1, keepdim=True)
+        denom = (var + self.eps).rsqrt()
+        return (zero_mean * denom) * self.weight + self.bias
 
 class ANEOptimizedAttention(nn.Module):
     def __init__(self, embed_dim, n_heads, dropout=0.0):
@@ -41,9 +43,10 @@ class ANEOptimizedAttention(nn.Module):
         self.k_proj = nn.Conv2d(embed_dim, embed_dim, 1)
         self.v_proj = nn.Conv2d(embed_dim, embed_dim, 1)
         self.out_proj = nn.Conv2d(embed_dim, embed_dim, 1)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, query, key, value, attn_mask=None, **kwargs):
+        # query, key, value are (B, C, 1, S)
         B, C, _, S_tgt = query.shape
         _, _, _, S_src = key.shape
 
@@ -51,35 +54,29 @@ class ANEOptimizedAttention(nn.Module):
         k = self.k_proj(key)
         v = self.v_proj(value)
 
-        mh_q = q.split(self.head_dim, dim=1)
-        mh_k = k.transpose(1, 3).split(self.head_dim, dim=3)
-        mh_v = v.split(self.head_dim, dim=1)
+        # Vectorized Multi-Head Attention (3D MatMul is faster in CoreML EP)
+        # (B, C, 1, S) -> (B*H, head_dim, S)
+        qn = q.reshape(B * self.num_heads, self.head_dim, S_tgt)
+        kn = k.reshape(B * self.num_heads, self.head_dim, S_src).transpose(1, 2)
+        vn = v.reshape(B * self.num_heads, self.head_dim, S_src)
 
-        heads = []
-        for i in range(self.num_heads):
-            # attn_weights = torch.einsum('bchq,bkhc->bkhq', mh_q[i], mh_k[i]) * self.scale
-            # bchq: (B, C, 1, S), bkhc: (B, S, 1, C) -> bkhq: (B, S, 1, S)
-            q = mh_q[i].squeeze(2) # (B, C, S)
-            k = mh_k[i].squeeze(2) # (B, S, C)
-            attn_weights = torch.matmul(k, q).unsqueeze(2) * self.scale
+        # (BN, S_src, head_dim) @ (BN, head_dim, S_tgt) -> (BN, S_src, S_tgt)
+        aw = torch.matmul(kn, qn) * self.scale
 
-            if attn_mask is not None:
-                attn_weights = attn_weights + attn_mask
+        if attn_mask is not None:
+            # attn_mask: (B, S_src, 1, S_tgt) -> (B*H, S_src, S_tgt)
+            m = attn_mask.reshape(B, S_src, S_tgt).unsqueeze(1).expand(B, self.num_heads, S_src, S_tgt)
+            aw = aw + m.reshape(B * self.num_heads, S_src, S_tgt)
                 
-            attn_weights = F.softmax(attn_weights, dim=1)
-            attn_weights = self.dropout(attn_weights)
-            
-            # head = torch.einsum('bchs,bshq->bchq', mh_v[i], attn_weights)
-            # bchs: (B, C, 1, S), bshq: (B, S, 1, S) -> bchq: (B, C, 1, S)
-            v = mh_v[i].squeeze(2) # (B, C, S)
-            attn = attn_weights.squeeze(2) # (B, S, S)
-            head = torch.matmul(v, attn).unsqueeze(2)
-            heads.append(head)
-
-        out = torch.cat(heads, dim=1)
-        context_layer = self.out_proj(out)
+        aw = F.softmax(aw, dim=1)
+        aw = self.dropout(aw)
         
-        return context_layer, None
+        # (BN, head_dim, S_src) @ (BN, S_src, S_tgt) -> (BN, head_dim, S_tgt)
+        h = torch.matmul(vn, aw)
+        
+        # (BN, head_dim, S_tgt) -> (B, C, 1, S_tgt)
+        out = h.reshape(B, C, 1, S_tgt)
+        return self.out_proj(out), None
 
 class TableTransformerANE(nn.Module):
     def __init__(self, original_model):
@@ -100,6 +97,37 @@ class TableTransformerANE(nn.Module):
         self._patch_internals(self.bbox_predictor)
         self._patch_classifier()
         
+        # Precompute positions for 1000x1000 input
+        print("Precomputing positional embeddings...")
+        with torch.no_grad():
+            dummy_x = torch.zeros(1, 3, 1000, 1000)
+            dummy_m = torch.ones(1, 1000, 1000)
+            backbone_out = self.backbone(dummy_x, dummy_m)
+            # Find the 512-channel feature map
+            def find_512(x):
+                if isinstance(x, torch.Tensor) and x.dim() == 4 and x.shape[1] == 512:
+                    return x
+                if hasattr(x, 'tensors'): return find_512(x.tensors)
+                if isinstance(x, (list, tuple)):
+                    for item in x:
+                        res = find_512(item)
+                        if res is not None: return res
+                return None
+            
+            feat = find_512(backbone_out)
+            proj_feat = self.input_projection(feat)
+            _, D, H_feat, W_feat = proj_feat.shape
+            
+            feat_mask = torch.ones((1, H_feat, W_feat))
+            pos_out = self.backbone.position_embedding(proj_feat, feat_mask)
+            if hasattr(pos_out, 'tensors'): pos_out = pos_out.tensors
+            elif isinstance(pos_out, (list, tuple)): pos_out = pos_out[-1]
+            
+            self.register_buffer("fixed_pos", pos_out.view(1, D, 1, H_feat * W_feat))
+            self.register_buffer("fixed_query_pos", self.query_position_embeddings.weight.T.unsqueeze(0).unsqueeze(2))
+            self.H_feat = H_feat
+            self.W_feat = W_feat
+
     def _patch_classifier(self):
         child = self.class_labels_classifier
         new_conv = nn.Conv2d(child.in_features, child.out_features, 1)
@@ -131,51 +159,47 @@ class TableTransformerANE(nn.Module):
                 new_ln.weight.data = child.weight.data.view(1, -1, 1, 1)
                 new_ln.bias.data = child.bias.data.view(1, -1, 1, 1)
                 setattr(module, name, new_ln)
+            elif "FrozenBatchNorm" in child.__class__.__name__:
+                new_bn = nn.BatchNorm2d(child.weight.shape[0], eps=child.eps)
+                new_bn.weight.data = child.weight.data
+                new_bn.bias.data = child.bias.data
+                new_bn.running_mean.data = child.running_mean.data
+                new_bn.running_var.data = child.running_var.data
+                new_bn.eps = child.eps
+                setattr(module, name, new_bn)
             else:
                 self._patch_internals(child)
 
-    def _extract_tensor(self, x):
-        if hasattr(x, 'tensors'):
-            return x.tensors
-        if isinstance(x, (list, tuple)):
-             return self._extract_tensor(x[-1])
-        return x
-
     def forward(self, pixel_values):
-        B, C, H, W = pixel_values.shape
-        pixel_mask = torch.ones((B, H, W), device=pixel_values.device)
+        B = pixel_values.shape[0]
         
-        # 1. Backbone
+        # 1. Backbone - Use fixed ones mask to satisfy the API if needed, 
+        # but the actual feature extraction is what we want.
+        # We call the model directly to avoid extra wrappers.
+        pixel_mask = torch.ones((B, 1000, 1000), device=pixel_values.device)
         backbone_outputs = self.backbone(pixel_values, pixel_mask)
-        target_features = None
-        if hasattr(backbone_outputs, 'feature_maps'):
-            for fm in backbone_outputs.feature_maps:
-                t = fm[0] if isinstance(fm, (list, tuple)) else fm
-                if hasattr(t, 'tensors'): t = t.tensors
-                if t.shape[1] == 512:
-                    target_features = t
-                    break
-        if target_features is None:
-             def extract_512(x):
-                 if hasattr(x, 'tensors'): x = x.tensors
-                 if isinstance(x, torch.Tensor) and x.shape[1] == 512: return x
-                 if isinstance(x, (list, tuple)):
-                     for item in x:
-                         res = extract_512(item)
-                         if res is not None: return res
-                 return None
-             target_features = extract_512(backbone_outputs)
-        features = target_features
-
+        
+        # Robustly extract the 512-channel feature map
+        def find_512(x):
+            if isinstance(x, torch.Tensor) and x.dim() == 4 and x.shape[1] == 512:
+                return x
+            if hasattr(x, 'tensors'): return find_512(x.tensors)
+            if isinstance(x, (list, tuple)):
+                for item in x:
+                    res = find_512(item)
+                    if res is not None: return res
+            return None
+            
+        features = find_512(backbone_outputs)
+        
         # 2. Input Projection
         projected_features = self.input_projection(features)
-        B, D, H_feat, W_feat = projected_features.shape
-        src = projected_features.view(B, D, 1, H_feat*W_feat)
+        S = self.H_feat * self.W_feat
+        D = projected_features.shape[1]
+        src = projected_features.view(B, D, 1, S)
         
-        # 3. Position Embeddings
-        feat_mask = torch.ones((B, H_feat, W_feat), device=pixel_values.device)
-        pos_outputs = self.backbone.position_embedding(projected_features, feat_mask)
-        pos = self._extract_tensor(pos_outputs).view(B, D, 1, H_feat*W_feat)
+        # 3. Use Precomputed Position Embeddings
+        pos = self.fixed_pos.expand(B, -1, -1, -1)
         
         # 4. Encoder
         memory = src
@@ -183,9 +207,7 @@ class TableTransformerANE(nn.Module):
             residual = memory
             hidden_states = layer.self_attn_layer_norm(memory)
             q = hidden_states + pos
-            k = hidden_states + pos
-            v = hidden_states
-            attn_output, _ = layer.self_attn(query=q, key=k, value=v)
+            attn_output, _ = layer.self_attn(query=q, key=q, value=hidden_states)
             hidden_states = residual + attn_output
             
             residual = hidden_states
@@ -198,7 +220,7 @@ class TableTransformerANE(nn.Module):
         memory = self.encoder.layernorm(memory)
 
         # 5. Decoder
-        query_pos = self.query_position_embeddings.weight.T.unsqueeze(0).unsqueeze(2).expand(B, -1, -1, -1)
+        query_pos = self.fixed_query_pos.expand(B, -1, -1, -1)
         tgt = torch.zeros_like(query_pos)
         
         for layer in self.decoder.layers:
@@ -206,9 +228,7 @@ class TableTransformerANE(nn.Module):
             residual = tgt
             hidden_states = layer.self_attn_layer_norm(tgt)
             q = hidden_states + query_pos
-            k = hidden_states + query_pos
-            v = hidden_states
-            attn_output, _ = layer.self_attn(query=q, key=k, value=v)
+            attn_output, _ = layer.self_attn(query=q, key=q, value=hidden_states)
             tgt = residual + attn_output
             
             # Encoder Attention (Cross)
@@ -216,8 +236,7 @@ class TableTransformerANE(nn.Module):
             hidden_states = layer.encoder_attn_layer_norm(tgt)
             q = hidden_states + query_pos
             k = memory + pos
-            v = memory
-            attn_output, _ = layer.encoder_attn(query=q, key=k, value=v)
+            attn_output, _ = layer.encoder_attn(query=q, key=k, value=memory)
             tgt = residual + attn_output
             
             # FFN
@@ -278,10 +297,11 @@ def main():
         dummy_input,
         ANE_ONNX_PATH,
         export_params=True,
-        opset_version=14,
+        opset_version=15,
         do_constant_folding=True,
         input_names=["pixel_values"],
         output_names=["logits", "pred_boxes"],
+        # ANE prefers static shapes
         dynamic_axes={
             "pixel_values": {0: "batch_size"},
             "logits": {0: "batch_size"},
